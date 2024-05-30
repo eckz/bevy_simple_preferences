@@ -36,13 +36,15 @@ pub enum PreferencesError {
 
 pub(crate) type Result<T> = std::result::Result<T, PreferencesError>;
 
+pub(crate) type DefaultMap = (
+    TypePathTable,
+    Box<dyn Fn() -> Box<dyn Reflect> + Send + Sync>,
+);
+
 #[derive(Resource, Default)]
 pub(crate) struct PreferencesRegistry {
     from_reflect_map: HashMap<String, ReflectFromReflect>,
-    default_map: Vec<(
-        TypePathTable,
-        Box<dyn Fn() -> Box<dyn Reflect + 'static> + 'static + Send + Sync>,
-    )>,
+    default_map: Vec<DefaultMap>,
 }
 
 impl PreferencesRegistry {

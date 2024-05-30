@@ -22,7 +22,8 @@ bevy = { version = "0.13", default-features = false, features = [
     "multi-threaded",
     "bevy_render",
     "bevy_winit",
-    "webgl2"
+    "webgl2",
+    "x11"
 ] }
 bevy-inspector-egui = "0.24"
 rand = "0.8"
