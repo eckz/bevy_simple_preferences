@@ -61,6 +61,7 @@ impl<'w, 's, T: Clone + Reflect + TypePath + Send + Sync + 'static> Preferences<
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[cfg(test)]
 mod tests {
     use bevy::prelude::*;

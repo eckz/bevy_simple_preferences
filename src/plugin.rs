@@ -160,14 +160,15 @@ pub fn save_preferences(preferences: Res<PreferencesMap>, storage: Res<Preferenc
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[cfg(test)]
 mod tests {
     use bevy::prelude::*;
     use bevy::utils::HashMap;
     use rand::random;
-    use tempfile::tempdir;
 
-    use crate::map::PreferencesMap;
+    use crate::map::{PreferencesMap, PreferencesMapDeserializeSeed};
+    use crate::storage::PreferencesStorage;
     use crate::{PreferencesPlugin, PreferencesRegistry, RegisterPreferences};
 
     #[derive(Reflect, Debug, Default)]
@@ -181,9 +182,18 @@ mod tests {
         some_map: HashMap<String, MyPreferences>,
     }
 
+    fn load_preferences_from_world(
+        storage: &PreferencesStorage,
+        world: &World,
+    ) -> crate::Result<PreferencesMap> {
+        let type_registry_arc = world.get_resource::<AppTypeRegistry>().unwrap().0.clone();
+        let seed = PreferencesMapDeserializeSeed::new(type_registry_arc);
+        storage.load_preferences(seed)
+    }
+
     #[test]
     fn preferences_plugin_reads_from_disk() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
 
         let mut app = App::new();
         let type_registry = app.world.resource::<AppTypeRegistry>().0.clone();
@@ -224,7 +234,7 @@ mod tests {
 
     #[test]
     fn preferences_plugin_saves_to_disk() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
 
         let mut app = App::new();
 
@@ -253,7 +263,7 @@ mod tests {
         // We verify the preferences were stored to disk
         {
             let storage = storage_builder.create_storage().unwrap();
-            let mut preferences = storage.load_preferences_from_world(&app.world).unwrap();
+            let mut preferences = load_preferences_from_world(&storage, &app.world).unwrap();
             let registry = app.world.get_resource::<PreferencesRegistry>().unwrap();
             registry.apply_from_reflect_and_add_defaults(&mut preferences);
 

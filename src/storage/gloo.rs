@@ -1,5 +1,5 @@
 use crate::map::PreferencesMapDeserializeSeed;
-use bevy::log::{debug, info};
+use bevy::log::*;
 use serde::de::DeserializeSeed;
 
 use crate::storage::PreferencesStorageImpl;
@@ -92,10 +92,80 @@ where
             .expect("unreachable: get_item does not throw an exception")
             .ok_or_else(|| gloo_storage::errors::StorageError::KeyNotFound(key.to_string()))?;
 
-        let mut deserializer =
-            serde_json::de::Deserializer::from_reader(item_string.as_str().as_bytes());
+        let mut deserializer = serde_json::de::Deserializer::from_reader(item_string.as_bytes());
         let item = seed.deserialize(&mut deserializer)?;
 
         Ok(item)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::storage::gloo::GlooStorage;
+    use crate::storage::PreferencesStorageImpl;
+    use crate::PreferencesMap;
+    use bevy::prelude::Reflect;
+    use bevy::reflect::TypeRegistryArc;
+    use std::borrow::Cow;
+    use wasm_bindgen_test::{wasm_bindgen_test as test, wasm_bindgen_test_configure};
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[derive(Reflect, PartialEq, Debug)]
+    struct Foo {
+        a: u32,
+        b: u32,
+    }
+
+    #[derive(Reflect, PartialEq, Debug)]
+    struct Bar(Cow<'static, str>);
+
+    impl Bar {
+        fn new(value: impl Into<Cow<'static, str>>) -> Self {
+            Self(value.into())
+        }
+    }
+
+    fn get_registry() -> TypeRegistryArc {
+        let type_registry_arc = TypeRegistryArc::default();
+
+        {
+            let mut type_registry = type_registry_arc.write();
+
+            type_registry.register::<Foo>();
+            type_registry.register::<Bar>();
+            type_registry.register::<Cow<'static, str>>();
+        }
+
+        type_registry_arc
+    }
+
+    const PREFERENCES_KEY: &str = "TEST_PREFERENCES_KEY";
+
+    fn write_and_read_storage(storage: GlooStorage) {
+        let registry = get_registry();
+
+        let mut map = PreferencesMap::new(registry.clone());
+
+        map.set(Foo { a: 1, b: 2 });
+        map.set(Bar::new("BarValue"));
+
+        storage.save_preferences(&map).unwrap();
+
+        let new_map = storage
+            .load_preferences(PreferencesMap::deserialize_seed(registry))
+            .unwrap();
+
+        assert_eq!(new_map, map);
+    }
+
+    #[test]
+    fn write_and_read_from_local_storage() {
+        write_and_read_storage(GlooStorage::local(PREFERENCES_KEY));
+    }
+
+    #[test]
+    fn write_and_read_from_session_storage() {
+        write_and_read_storage(GlooStorage::session(PREFERENCES_KEY));
     }
 }

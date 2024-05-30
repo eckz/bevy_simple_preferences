@@ -3,6 +3,9 @@ name = "bevy_simple_preferences"
 version = "0.0.1-dev"
 edition = "2021"
 
+[lints.rust]
+unsafe_code = "forbid"
+
 [dependencies]
 serde = { version = "1.0" }
 thiserror = "1.0"
@@ -25,7 +28,10 @@ bevy = { version = "0.13", default-features = false, features = [
     "webgl2",
     "x11"
 ] }
-bevy-inspector-egui = "0.24"
+bevy-inspector-egui = { version = "0.24", default-features = false }
 rand = "0.8"
 serde_test = "1.0"
 serde_assert = "0.7"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

@@ -16,13 +16,6 @@ pub trait PreferencesStorageImpl: Send + Sync + 'static {
         deserialize_seed: PreferencesMapDeserializeSeed,
     ) -> Result<PreferencesMap>;
 
-    #[cfg(test)]
-    fn load_preferences_from_world(&self, world: &World) -> Result<PreferencesMap> {
-        let type_registry_arc = world.get_resource::<AppTypeRegistry>().unwrap().0.clone();
-        let seed = PreferencesMapDeserializeSeed::new(type_registry_arc);
-        self.load_preferences(seed)
-    }
-
     fn save_preferences(&self, map: &PreferencesMap) -> Result<()>;
 }
 

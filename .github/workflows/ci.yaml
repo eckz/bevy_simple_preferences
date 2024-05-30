@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["*"]
   pull_request:
     branches: [main]
 
@@ -10,6 +10,62 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Run cargo clippy -- -D warnings
+  check:
+    strategy:
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+          - name: Wasm
+            os: ubuntu-latest
+            target: wasm32-unknown-unknown
+
+          - name: MacOS aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+
+    name: Clippy ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-clippy-${{ hashFiles('**/Cargo.toml') }}
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.target }}
+      - name: Run cargo check
+        run: cargo check --target ${{ matrix.target }}
+      - name: Run clippy
+        run: cargo clippy --target ${{ matrix.target }} --tests -- -D warnings
+
+  # Run cargo fmt --all -- --check
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Run cargo fmt
+        run: cargo fmt --all -- --check
+
 
   # Run cargo test
   test:
@@ -33,9 +89,9 @@ jobs:
       - name: Run cargo test
         run: cargo test
 
-  # Run cargo test
-  builds_on_wasm:
-    name: Builds on wasm
+  # Run wasm-pack test
+  test_wasm:
+    name: Test Wasm
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
@@ -49,52 +105,14 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-buikd-wasm-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-test-wasm-${{ hashFiles('**/Cargo.toml') }}
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Run cargo build
-        run: cargo build --target wasm32-unknown-unknown
-
-  # Run cargo clippy -- -D warnings
-  clippy_check:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-      - name: Cache
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.toml') }}
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Install Dependencies
-        run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev
-      - name: Run cargo check
-        run: cargo check
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
-
-  # Run cargo fmt --all -- --check
-  format:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Run cargo fmt
-        run: cargo fmt --all -- --check
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Tests headless chrome
+        run: wasm-pack test --headless --chrome
+      - name: Tests headless firefox
+        run: wasm-pack test --headless --firefox
