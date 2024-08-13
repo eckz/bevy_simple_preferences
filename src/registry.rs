@@ -19,13 +19,6 @@ fn preferences_registry_fail(full_path: &str, short_path: &str, msg: &str) -> ! 
 }
 
 impl<'a> PreferencesRegistryData<'a> {
-    pub fn from_type_path<T: TypePath>(type_registry: &'a TypeRegistry) -> Self {
-        let Some(type_registration) = type_registry.get_with_type_path(T::type_path()) else {
-            preferences_registry_fail(T::type_path(), T::short_type_path(), "is not registered");
-        };
-        Self::from_type_registration(type_registration)
-    }
-
     pub fn from_type_info(type_registry: &'a TypeRegistry, type_info: &TypeInfo) -> Self {
         let Some(type_registration) = type_registry.get(type_info.type_id()) else {
             preferences_registry_fail(

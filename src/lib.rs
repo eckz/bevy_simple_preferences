@@ -32,7 +32,6 @@
 //!# }
 //!
 //! App::new()
-//!     .add_plugins(DefaultPlugins)
 //!     .add_plugins(PreferencesPlugin::persisted_with_app_name("YourAppName"))
 //!     .register_preferences::<ExampleSettings>();
 //! ```

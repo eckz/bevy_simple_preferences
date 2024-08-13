@@ -255,7 +255,7 @@ impl PreferencesReflectMap {
             let key = self.effective_type_path_from_type_info(type_info);
 
             let type_registry = &self.type_registry_arc.read();
-            let registry_data = PreferencesRegistryData::from_type_info(&type_registry, type_info);
+            let registry_data = PreferencesRegistryData::from_type_info(type_registry, type_info);
 
             let value = registry_data.apply_from_reflect(value);
 
