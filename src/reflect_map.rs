@@ -1,36 +1,154 @@
+//! Contains [`PreferencesReflectMap`] that allows preferences to be serialize and deserialize using reflection.
+//!
+use crate::registry::PreferencesRegistryData;
+use crate::{PreferencesError, PreferencesType};
 use bevy::prelude::*;
 use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
-use bevy::reflect::{TypePathTable, TypeRegistry, TypeRegistryArc};
-use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
-
-use crate::PreferencesError;
+use bevy::reflect::{TypeInfo, TypeRegistry, TypeRegistryArc};
 use serde::de::{DeserializeSeed, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
+
+/// A preferences reflect map that allows to serialize and deserialize preferences.
+///
+/// Preferences are strongly typed, and defined independently by any `Plugin` that needs persistent
+/// preferences. Choice of serialization format and behavior is up to the application developer. The
+/// preferences storage map simply provides a common API surface to consolidate preferences for all
+/// plugins in one location.
+///
+/// Generally speaking neither final user nor crate developers need to use the [`PreferencesReflectMap`] directly.
+/// It will be used internally when using [`crate::PreferencesPlugin`] and [`crate::RegisterPreferencesExt::register_preferences`]
+///
+/// ### Usage
+///
+/// Preferences only require that a type being added derives [`Reflect`].
+///
+/// ```
+/// # use bevy::reflect::Reflect;
+/// #[derive(Reflect)]
+/// struct MyPluginPreferences {
+///     do_things: bool,
+///     fizz_buzz_count: usize
+/// }
+/// ```
+/// You can [`Self::get`] or [`Self::set`] preferences by accessing this type as a [`Resource`]
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_simple_preferences::*;
+/// # use bevy_simple_preferences::reflect_map::PreferencesReflectMap;
+///
+/// #[derive(Reflect)]
+/// struct MyPluginPreferences {
+///     do_things: bool,
+///     fizz_buzz_count: usize
+/// }
+///
+/// fn update(mut prefs: ResMut<PreferencesReflectMap>) {
+///     let settings = MyPluginPreferences {
+///         do_things: false,
+///         fizz_buzz_count: 9000,
+///     };
+///     prefs.set(settings);
+///
+///     // Accessing preferences only requires the type:
+///     let mut new_settings = prefs.get::<MyPluginPreferences>();
+///
+///     // If you are updating an existing struct, all type information can be inferred:
+///     new_settings = prefs.get();
+/// }
+/// ```
+///
+/// ### Serialization
+///
+/// The preferences map is build on `bevy_reflect`. This makes it possible to serialize preferences
+/// into a dynamic structure, and deserialize it back into this map, while retaining a
+/// strongly-typed API. It's not required that the inner types implement [`Serialize`], but
+/// if they do, and they register it as a reflect type data, it will be used.
+///
+/// It implements [`serde::Serialize`] so it can be serialized using any format.
+///
+/// ```
+/// # use bevy::reflect::{Reflect, TypeRegistryArc};
+/// # use serde::Serialize;
+///
+/// # use bevy_simple_preferences::reflect_map::PreferencesReflectMap;
+///
+/// # #[derive(Reflect)]
+/// # struct MyPluginPreferences {
+/// #     do_things: bool,
+/// # }
+///
+/// # let register_type = TypeRegistryArc::default();
+/// # register_type.write().register::<MyPluginPreferences>();
+///
+/// let mut map = PreferencesReflectMap::empty(register_type);
+/// map.set(MyPluginPreferences {
+///     do_things: true
+/// });
+/// let contents = toml::to_string(&map).unwrap();
+///
+/// assert_eq!(&contents, "[MyPluginPreferences]\ndo_things = true\n");
+/// ```
+///
+/// ### Reflection
+/// It implements [`Reflect`] and [`bevy::reflect::Map`] so it can be used as any other reflectable map.
+///
+/// ```
+/// # use bevy::reflect::{DynamicMap, Map, Reflect, TypeRegistryArc};
+/// use bevy::utils::HashMap;
+/// # use serde::Serialize;
+///
+/// # use bevy_simple_preferences::reflect_map::PreferencesReflectMap;
+///
+/// # #[derive(Reflect, Debug)]
+/// # struct MyPluginPreferences {
+/// #     do_things: bool,
+/// # }
+/// # let register_type = TypeRegistryArc::default();
+/// # register_type.write().register::<MyPluginPreferences>();
+/// let mut preferences_map = PreferencesReflectMap::empty(register_type);
+/// preferences_map.set(MyPluginPreferences {
+///     do_things: true
+/// });
+/// let mut hash_map = HashMap::<String, MyPluginPreferences>::default();
+/// hash_map.try_apply(&preferences_map).unwrap();
+///
+/// let preferences_from_dynamic_map = hash_map.get("MyPluginPreferences").unwrap();
+/// assert!(preferences_from_dynamic_map.do_things);
+/// ```
+///
 
 #[derive(Resource, TypePath)]
-pub struct PreferencesMap {
+pub struct PreferencesReflectMap {
     values: BTreeMap<String, Box<dyn Reflect>>,
     type_registry_arc: TypeRegistryArc,
 }
 
-impl Debug for PreferencesMap {
+impl Debug for PreferencesReflectMap {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         Reflect::debug(self, f)
     }
 }
 
-impl PartialEq for PreferencesMap {
+impl PartialEq for PreferencesReflectMap {
     fn eq(&self, other: &Self) -> bool {
         if let Some(type_info) = other.get_represented_type_info() {
-            if type_info.type_path() != PreferencesMap::type_path() {
+            if type_info.type_path() != PreferencesReflectMap::type_path() {
                 return false;
             }
         } else {
             return false;
         }
-        PreferencesMap::reflect_partial_eq(self, other).unwrap_or(false)
+        PreferencesReflectMap::reflect_partial_eq(self, other).unwrap_or(false)
+    }
+}
+
+impl FromWorld for PreferencesReflectMap {
+    fn from_world(world: &mut World) -> Self {
+        let type_registry_arc = world.resource::<AppTypeRegistry>().0.clone();
+        Self::empty(type_registry_arc)
     }
 }
 
@@ -50,26 +168,50 @@ fn effective_type_path<'a>(
     }
 }
 
-impl PreferencesMap {
-    pub(crate) fn new(type_registry_arc: TypeRegistryArc) -> Self {
+impl PreferencesReflectMap {
+    /// Creates a new empty storage map
+    pub fn empty(type_registry_arc: TypeRegistryArc) -> Self {
         Self {
             values: BTreeMap::new(),
             type_registry_arc,
         }
     }
 
-    pub(crate) fn set_if_missing(
-        &mut self,
-        type_path_table: &TypePathTable,
-        f: impl FnOnce() -> Box<dyn Reflect>,
-    ) {
-        let type_registry = self.type_registry_arc.read();
-        let type_path = effective_type_path(
-            type_path_table.path(),
-            type_path_table.short_path(),
-            &type_registry,
-        );
-        self.values.entry(type_path.to_owned()).or_insert_with(f);
+    /// Creates a storage map using the specified dynamic values.
+    /// Values are converted into concrete types using the FromReflect implementation.
+    pub fn from_dynamic_values(
+        values: impl IntoIterator<Item = (String, Box<dyn Reflect>)>,
+        type_registry_arc: TypeRegistryArc,
+    ) -> Self {
+        let values = values.into_iter();
+
+        // This is scope is to make the borrow checker happy
+        let values = {
+            let type_registry = type_registry_arc.read();
+
+            values
+                .map(|(key, value)| {
+                    if let Some(type_info) = value.get_represented_type_info() {
+                        let registry_data =
+                            PreferencesRegistryData::from_type_info(&type_registry, type_info);
+
+                        let new_value = registry_data.apply_from_reflect(value);
+
+                        debug_assert!(!new_value.is_dynamic(), "Dynamic value generated");
+
+                        (key, new_value)
+                    } else {
+                        // TODO: Should we panic instead?, or at least ignore the value
+                        (key, value)
+                    }
+                })
+                .collect()
+        };
+
+        Self {
+            values,
+            type_registry_arc,
+        }
     }
 
     fn effective_type_path_from_type<T: TypePath>(&self) -> &'static str {
@@ -86,8 +228,17 @@ impl PreferencesMap {
         )
     }
 
+    fn effective_type_path_from_type_info<'a>(&self, type_info: &'a TypeInfo) -> &'a str {
+        let type_registry = self.type_registry_arc.read();
+        effective_type_path(
+            type_info.type_path(),
+            type_info.type_path_table().short_path(),
+            &type_registry,
+        )
+    }
+
     /// Set preferences entry of type `P`, potentially overwriting an existing entry.
-    pub fn set<P: Reflect>(&mut self, value: P) {
+    pub fn set<T: PreferencesType>(&mut self, value: T) {
         self.values.insert(
             self.effective_type_path_from_dyn(&value).to_owned(),
             Box::new(value),
@@ -96,88 +247,77 @@ impl PreferencesMap {
 
     /// Set preferences entry from a boxed trait object of unknown type.
     pub fn set_dyn(&mut self, value: Box<dyn Reflect>) {
-        self.values.insert(
-            self.effective_type_path_from_dyn(value.as_reflect())
-                .to_owned(),
-            value,
-        );
-    }
+        if value.is_dynamic() {
+            let type_info = value
+                .get_represented_type_info()
+                .expect("Provided dynamic value without a a represented type info");
 
-    /// Get preferences entry of type `P`.
-    #[track_caller]
-    pub fn get<P: Reflect + TypePath>(&self) -> &P {
-        self.get_fallible().unwrap_or_else(|| {
-            panic!(
-                "Type {} not registered using register_preferences",
-                P::type_path()
-            )
-        })
+            let key = self.effective_type_path_from_type_info(type_info);
+
+            let type_registry = &self.type_registry_arc.read();
+            let registry_data = PreferencesRegistryData::from_type_info(&type_registry, type_info);
+
+            let value = registry_data.apply_from_reflect(value);
+
+            self.values.insert(key.to_owned(), value);
+        } else {
+            self.values.insert(
+                self.effective_type_path_from_dyn(value.as_reflect())
+                    .to_owned(),
+                value,
+            );
+        }
     }
 
     /// Get preferences entry of type `T`.
-    pub fn get_fallible<T: Reflect + TypePath>(&self) -> Option<&T> {
+    #[track_caller]
+    pub fn get<T: PreferencesType>(&self) -> Option<&T> {
         self.values
             .get(self.effective_type_path_from_type::<T>())
             .and_then(|val| val.downcast_ref())
     }
 
-    /// Get a mutable reference to a preferences entry of type `P`.
-    #[track_caller]
-    pub fn get_mut<T: Reflect + TypePath>(&mut self) -> &mut T {
-        self.get_mut_fallible().unwrap_or_else(|| {
-            panic!(
-                "Type {} not registered using register_preferences",
-                T::type_path()
-            )
-        })
-    }
-
-    /// Get a mutable reference to a preferences entry of type `P`.
-    #[track_caller]
-    pub fn get_mut_or_default<T: Reflect + TypePath + Default>(&mut self) -> &mut T {
-        self.values
-            .entry(self.effective_type_path_from_type::<T>().to_owned())
-            .or_insert_with(|| Box::<T>::default())
-            .downcast_mut()
-            .expect("Could not downcast")
-    }
-
     /// Get a mutable reference to a preferences entry of type `T`.
-    pub fn get_mut_fallible<T: Reflect + TypePath>(&mut self) -> Option<&mut T> {
+    #[track_caller]
+    pub fn get_mut<T: PreferencesType>(&mut self) -> Option<&mut T> {
         let type_path = self.effective_type_path_from_type::<T>();
         self.values
             .get_mut(type_path)
             .and_then(|val| val.downcast_mut())
     }
 
-    /// Iterator over all preference entries as [`Reflect`] trait objects.
+    /// Iterator over all preference values as [`Reflect`] trait objects.
     pub fn iter_values(&self) -> impl Iterator<Item = &dyn Reflect> {
         self.values.values().map(|v| &**v)
     }
 
+    /// Iterator over all preference entries as a tuple of ['&str'], [`&dyn Reflect`] objects.
     pub fn iter_entries(&mut self) -> impl Iterator<Item = (&str, &dyn Reflect)> {
         self.values.iter_mut().map(|(k, v)| (k.as_str(), &**v))
     }
 
-    /// Remove and return an entry from preferences, if it exists.
-    pub fn remove<T: Reflect + TypePath>(&mut self) -> Option<Box<T>> {
+    /// Remove and return an entry from the map, if it exists.
+    pub fn take<T: PreferencesType>(&mut self) -> Option<T> {
         let type_path = self.effective_type_path_from_type::<T>();
 
         self.values
             .remove(type_path)
             .and_then(|val| val.downcast().ok())
+            .map(|val| *val)
     }
 
+    /// Returns if the map is empty
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
 
+    /// Returns how many preferences are in the map
     pub fn len(&self) -> usize {
         self.values.len()
     }
 }
 
-impl Serialize for PreferencesMap {
+impl Serialize for PreferencesReflectMap {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -196,24 +336,32 @@ impl Serialize for PreferencesMap {
     }
 }
 
-pub struct PreferencesMapDeserializeSeed {
+/// [`DeserializeSeed`] used to deserialize a [`PreferencesMap].
+/// Is required to deserialize this way in order to have a reference to
+/// the [`TypeRegistry`].
+///
+/// Best way to get a new seed is to call [`PreferencesReflectMap::deserialize_seed`]
+pub struct PreferencesReflectMapDeserializeSeed {
     type_registry_arc: TypeRegistryArc,
 }
 
-impl PreferencesMapDeserializeSeed {
-    pub fn new(type_registry_arc: TypeRegistryArc) -> Self {
+impl PreferencesReflectMapDeserializeSeed {
+    pub(crate) fn new(type_registry_arc: TypeRegistryArc) -> Self {
         Self { type_registry_arc }
     }
 }
 
-impl PreferencesMap {
-    pub fn deserialize_seed(type_registry_arc: TypeRegistryArc) -> PreferencesMapDeserializeSeed {
-        PreferencesMapDeserializeSeed::new(type_registry_arc)
+impl PreferencesReflectMap {
+    /// Creates an [`PreferencesReflectMapDeserializeSeed`] that allows deserialization of [`PreferencesReflectMap`].
+    pub fn deserialize_seed(
+        type_registry_arc: TypeRegistryArc,
+    ) -> PreferencesReflectMapDeserializeSeed {
+        PreferencesReflectMapDeserializeSeed::new(type_registry_arc)
     }
 }
 
-impl<'de> DeserializeSeed<'de> for PreferencesMapDeserializeSeed {
-    type Value = PreferencesMap;
+impl<'de> DeserializeSeed<'de> for PreferencesReflectMapDeserializeSeed {
+    type Value = PreferencesReflectMap;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
@@ -265,21 +413,22 @@ impl<'de> DeserializeSeed<'de> for PreferencesMapDeserializeSeed {
             type_registry_arc: type_registry_arc.clone(),
         })?;
 
-        Ok(PreferencesMap {
+        Ok(PreferencesReflectMap::from_dynamic_values(
             values,
             type_registry_arc,
-        })
+        ))
     }
 }
 
 // Implementation of Reflect for PreferencesMap
 mod reflect {
-    use super::PreferencesMap;
+    use super::PreferencesReflectMap;
+    use bevy::prelude::ReflectFromWorld;
     use bevy::reflect::serde::Serializable;
     use bevy::reflect::*;
     use std::any::Any;
 
-    impl Map for PreferencesMap {
+    impl Map for PreferencesReflectMap {
         fn get(&self, key: &dyn Reflect) -> Option<&dyn Reflect> {
             key.downcast_ref::<String>()
                 .and_then(|key| self.values.get(key))
@@ -356,7 +505,7 @@ mod reflect {
         }
     }
 
-    impl Reflect for PreferencesMap {
+    impl Reflect for PreferencesReflectMap {
         fn get_represented_type_info(&self) -> Option<&'static TypeInfo> {
             Some(<Self as Typed>::type_info())
         }
@@ -387,6 +536,10 @@ mod reflect {
 
         fn apply(&mut self, value: &dyn Reflect) {
             map_apply(self, value)
+        }
+
+        fn try_apply(&mut self, value: &dyn Reflect) -> Result<(), ApplyError> {
+            map_try_apply(self, value)
         }
 
         fn set(&mut self, value: Box<dyn Reflect>) -> Result<(), Box<dyn Reflect>> {
@@ -434,26 +587,27 @@ mod reflect {
         }
     }
 
-    impl Typed for PreferencesMap {
+    impl Typed for PreferencesReflectMap {
         fn type_info() -> &'static TypeInfo {
-            use bevy::reflect::utility::GenericTypeInfoCell;
+            use bevy::reflect::utility::NonGenericTypeInfoCell;
 
-            static CELL: GenericTypeInfoCell = GenericTypeInfoCell::new();
-            CELL.get_or_insert::<Self, _>(|| {
-                TypeInfo::Map(MapInfo::new::<Self, String, DynReflect>())
-            })
+            static CELL: NonGenericTypeInfoCell = NonGenericTypeInfoCell::new();
+            CELL.get_or_set(|| TypeInfo::Map(MapInfo::new::<Self, String, DynReflect>()))
         }
     }
 
-    impl GetTypeRegistration for PreferencesMap {
+    impl GetTypeRegistration for PreferencesReflectMap {
         fn get_type_registration() -> TypeRegistration {
             let mut registration = TypeRegistration::of::<Self>();
             registration.insert::<ReflectFromPtr>(FromType::<Self>::from_type());
+            registration.insert::<ReflectFromWorld>(FromType::<Self>::from_type());
+            // In bevy 0.15 this should work because FromReflect is not required anymore
+            // registration.insert::<ReflectResource>(FromType::<Self>::from_type());
             registration
         }
     }
 
-    // We define DynReflect that implements Reflect is Sized
+    // This is required because MapInfo::new does not work with `dyn Reflect` directly.
     #[derive(Reflect)]
     #[reflect(type_path = false)]
     pub(super) struct DynReflect;
@@ -488,40 +642,44 @@ mod tests {
     use bevy::reflect::{DynamicMap, TypeRegistryArc};
     use std::fmt::Debug;
 
-    use super::{PreferencesMap, PreferencesMapDeserializeSeed};
+    use super::{PreferencesReflectMap, PreferencesReflectMapDeserializeSeed};
+    use crate::ReflectPreferences;
     use serde_test::{assert_ser_tokens, Token};
 
-    #[derive(Reflect, Debug)]
+    #[derive(Reflect, Clone, PartialEq, Debug, Default)]
+    #[reflect(Preferences)]
     struct Foo {
         field: u32,
         option: Option<u32>,
     }
 
-    #[derive(Reflect, Clone, Default, Debug)]
+    #[derive(Reflect, Clone, PartialEq, Debug, Default)]
+    #[reflect(Preferences)]
     struct Bar(String);
 
     mod ambiguous {
-        use bevy::prelude::Reflect;
+        use crate::ReflectPreferences;
+        use bevy::prelude::*;
 
         #[derive(Reflect, Clone, PartialEq, Default, Debug)]
+        #[reflect(Preferences)]
         pub(super) struct Bar(pub(super) String);
     }
 
     fn get_registry() -> TypeRegistryArc {
-        let type_registry_arc = TypeRegistryArc::default();
+        let type_registry = TypeRegistryArc::default();
 
         {
-            let mut type_registry = type_registry_arc.write();
+            let mut type_registry = type_registry.write();
             type_registry.register::<Foo>();
             type_registry.register::<Bar>();
-            type_registry.register::<Option<u32>>();
         }
 
-        type_registry_arc
+        type_registry
     }
 
-    fn new_map() -> PreferencesMap {
-        PreferencesMap::new(get_registry())
+    fn new_map() -> PreferencesReflectMap {
+        PreferencesReflectMap::empty(get_registry())
     }
 
     #[test]
@@ -532,7 +690,7 @@ mod tests {
             option: Some(2),
         });
 
-        let value: &Foo = map.get();
+        let value: &Foo = map.get().unwrap();
 
         assert_eq!(value.field, 4);
         assert_eq!(value.option, Some(2));
@@ -546,10 +704,8 @@ mod tests {
         map.set(Bar("Bar".into()));
         map.set(ambiguous::Bar("ambiguousBar".into()));
 
-        println!("{map:#?}");
-
-        let bar: &Bar = map.get();
-        let ambiguous_bar: &ambiguous::Bar = map.get();
+        let bar: &Bar = map.get().unwrap();
+        let ambiguous_bar: &ambiguous::Bar = map.get().unwrap();
 
         assert_eq!(bar.0, "Bar");
         assert_eq!(ambiguous_bar.0, "ambiguousBar");
@@ -566,32 +722,21 @@ mod tests {
             .into_reflect(),
         );
 
-        let value: &Foo = map.get();
+        let value: &Foo = map.get().unwrap();
 
         assert_eq!(value.field, 4);
         assert_eq!(value.option, Some(2));
     }
 
     #[test]
-    fn test_get_mut_or_default() {
-        let mut map = new_map();
-
-        {
-            let value: &mut Bar = map.get_mut_or_default();
-            value.0 = "Other String".into();
-        }
-
-        let value: &Bar = map.get();
-        assert_eq!(value.0, "Other String");
-    }
-
-    #[test]
-    fn test_remove() {
+    fn test_take() {
         let mut map = new_map();
         map.set(Bar("H".into()));
 
-        map.remove::<Bar>();
-        assert!(map.get_fallible::<Bar>().is_none());
+        let taken_bar = map.take::<Bar>().unwrap();
+        assert_eq!(taken_bar.0, "H");
+
+        assert!(map.get::<Bar>().is_none());
         assert!(map.is_empty());
     }
 
@@ -613,6 +758,18 @@ mod tests {
             dynamic_map.reflect_partial_eq(&map).unwrap(),
             "{dynamic_map:#?} != {map:#?}"
         );
+    }
+
+    #[test]
+    fn test_apply_from_reflect_converts_dynamic_values() {
+        let mut map = new_map();
+        let foo = Foo {
+            field: 3,
+            option: None,
+        };
+        map.set_dyn(foo.clone_value());
+
+        assert_eq!(map.get::<Foo>(), Some(&foo));
     }
 
     #[test]
@@ -701,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn test_servebar_with_ambiguous() {
+    fn test_ser_bar_with_ambiguous() {
         let mut map = new_map();
         map.type_registry_arc.write().register::<ambiguous::Bar>();
 
@@ -712,14 +869,14 @@ mod tests {
             &map,
             &[
                 Token::Map { len: Some(2) },
-                Token::Str("bevy_simple_preferences::map::tests::Bar"),
+                Token::Str("bevy_simple_preferences::reflect_map::tests::Bar"),
                 Token::TupleStruct {
                     name: "Bar",
                     len: 1,
                 },
                 Token::Str("Bar"),
                 Token::TupleStructEnd,
-                Token::Str("bevy_simple_preferences::map::tests::ambiguous::Bar"),
+                Token::Str("bevy_simple_preferences::reflect_map::tests::ambiguous::Bar"),
                 Token::TupleStruct {
                     name: "Bar",
                     len: 1,
@@ -777,7 +934,7 @@ mod tests {
         T: serde::de::DeserializeSeed<'de>,
         T::Value: PartialEq + Debug,
     {
-        let mut de = serde_assert::Deserializer::builder(tokens.clone()).build();
+        let mut de = serde_assert::Deserializer::builder(tokens).build();
         match T::deserialize(seed, &mut de) {
             Ok(v) => {
                 assert_eq!(v, *value);
@@ -796,15 +953,17 @@ mod tests {
             option: None,
         });
 
-        let deserializer = PreferencesMapDeserializeSeed {
+        let deserializer = PreferencesReflectMapDeserializeSeed {
             type_registry_arc: map.type_registry_arc.clone(),
         };
 
+        // It takes the default value for Bar
         assert_de_seed_tokens(
             &map,
             deserializer,
             [
                 Token::Map { len: Some(1) },
+                // Foo
                 Token::Str("Foo".into()),
                 Token::Struct {
                     name: "Foo",

@@ -1,165 +1,221 @@
+//! # About
+//! Bevy Preferences Simple Abstraction
+//!
+//! Provides a simple Preferences API for Bevy that allows different crates to
+//! relay in a simple preferences abstraction giving the final app crate full control on how
+//! and where to store the preferences.
+//!
+//!
+//! # Examples
+//!
+//! You first need to define a struct / enum that represents your preferences.
+//! ```
+//!# use bevy::prelude::*;
+//!# use bevy_simple_preferences::*;
+//!
+//! #[derive(Reflect, Default)]
+//! struct ExampleSettings {
+//!     field_u32: u32,
+//!     some_str: String,
+//!     some_option: Option<String>,
+//! }
+//! ```
+//!
+//! And in your code, you just need to add the [`PreferencesPlugin`] and call [`RegisterPreferencesExt::register_preferences`]
+//! ```
+//!# use bevy::prelude::*;
+//!# use bevy_simple_preferences::*;
+//!
+//!# #[derive(Reflect, Default)]
+//!# struct ExampleSettings {
+//!#     field_u32: u32,
+//!# }
+//!
+//! App::new()
+//!     .add_plugins(DefaultPlugins)
+//!     .add_plugins(PreferencesPlugin::persisted_with_app_name("YourAppName"))
+//!     .register_preferences::<ExampleSettings>();
+//! ```
+//!
+//! If you are implementing a library, you don't need to add [`PreferencesPlugin`], since it's
+//! up the final user to add it themselves. But you can rely on the [`Preferences`] param to read and write preferences,
+//! even if the final user does not add the plugin.
+//!
+//! If the final user does not add the [`PreferencesPlugin`], the effect is that preferences are simply not stored.
+//!
+//! ```
+//!# use bevy::prelude::*;
+//!# use bevy_simple_preferences::*;
+//!
+//!# #[derive(Reflect, Default)]
+//!# struct MyCratePreferences {
+//!#     some_field: i32,
+//!# }
+//!
+//!# struct MyCratePlugin;
+//!
+//! impl Plugin for MyCratePlugin {
+//!     fn build(&self, app: &mut App) {
+//!         app.register_preferences::<MyCratePreferences>()
+//!             .add_systems(Update, |my_preferences: Preferences<MyCratePreferences>| {
+//!                 // Do stuff with your preferences
+//!                 assert!(my_preferences.some_field >= 0);
+//!             });
+//!         ;
+//!     }
+//! }
+//! # App::new().add_plugins(MyCratePlugin).run();
+//! ```
+//!
+//! # Supported Bevy Versions
+
+//! | Bevy | bevy_simple_preferences |
+//! | ---- | ----------------------- |
+//! | 0.14 | 0.1                     |
+//!
+//! # Details
+//! [`PreferencesPlugin`] is responsible to define where the preferences are stored,
+//! but sensible defaults are chosen for the user, like the storage path and format.
+//!
+//! ## Storage path
+//! By default, the following paths are used to store the preferences
+//!
+//! |Platform | Value                                                    | Example                                   |
+//! | ------- | -------------------------------------------------------- | ----------------------------------------- |
+//! | Native  | [`dirs::preference_dir`]/{app_name}/preferences.toml     | /home/alice/.config/MyApp/preferences.toml |
+//! | Wasm    | LocalStorage:{app_name}_preferences                      | LocalStorage:MyApp_preferences            |
+//!
+//! Final user can personalize this paths by using [`PreferencesPlugin::with_storage_type`] and use any convinient
+//! value of [`PreferencesStorageType`].
+//!
+//! ## Storage format
+//!
+//! By default, the following formats are used:
+//! |Platform | Format      | Example                                   |
+//! | ------- | ----------- | ----------------------------------------- |
+//! | Native  | `toml`      | [MyPluginPreferences]\nvalue = 3          |
+//! | Wasm    | `json`      | { "MyPluginPreferences": { "value": 3 } } |
+//! A different format (only for native) can be configured by implementing [`crate::storage::fs::FileStorageFormat`];
+//!
+//! Go to the [`crate::storage::fs::FileStorageFormat`] documentation for more information on how to do it.
+//!
+//!
+
 use bevy::prelude::*;
-use bevy::reflect::{FromType, GetTypeRegistration, TypePathTable};
-use bevy::utils::HashMap;
+use bevy::reflect::FromType;
+use std::sync::Arc;
 use thiserror::Error;
 
-mod map;
-pub mod param;
+pub mod reflect_map;
+
 mod plugin;
-mod storage;
+mod registry;
+mod resource;
+pub mod storage;
 
-pub use crate::map::PreferencesMap;
-pub use crate::param::Preferences;
 pub use crate::plugin::PreferencesPlugin;
+pub use crate::registry::RegisterPreferencesExt;
+pub use crate::resource::{Preferences, PreferencesResource};
 
+use crate::storage::PreferencesStorage;
+
+#[cfg(not(target_family = "wasm"))]
+use crate::storage::fs::{DefaultFileStorageFormat, FileStorageFormatFns};
+
+/// Possible errors that could happen during either loading or saving preferences
 #[derive(Error, Debug)]
 pub enum PreferencesError {
     #[cfg(not(target_family = "wasm"))]
-    #[error("I/O Error")]
+    /// Input/Output error while reading or writing to disk.
+    #[error("I/O Error: {0}")]
     IoError(#[from] std::io::Error),
 
-    #[cfg(not(target_family = "wasm"))]
-    #[error("Toml deserialization Error")]
-    TomlDeError(#[from] toml::de::Error),
+    /// Error while deserializing the preferences
+    #[error("Deserialization Error: {0}")]
+    DeserializationError(Box<dyn std::error::Error + Send + Sync>),
 
+    /// Error while serializing the preferences
     #[cfg(not(target_family = "wasm"))]
-    #[error("Toml serialization Error")]
-    TomlSerError(#[from] toml::ser::Error),
+    #[error("Serialization Error: {0}")]
+    SerializationError(Box<dyn std::error::Error + Send + Sync>),
 
+    /// While serializing or deserializing, a type has not been registered in the [`bevy::reflect::TypeRegistry`].
     #[error("Type {0} not registered")]
     UnregisteredType(String),
 
     #[cfg(target_family = "wasm")]
-    #[error("Error getting from storage")]
+    /// An error has occurred while storing in either LocalStorage or Session storage.
+    #[error("Error getting from storage: {0}")]
     GlooError(#[from] gloo_storage::errors::StorageError),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, PreferencesError>;
 
-pub(crate) type DefaultMap = (
-    TypePathTable,
-    Box<dyn Fn() -> Box<dyn Reflect> + Send + Sync>,
-);
-
-#[derive(Resource, Default)]
-pub(crate) struct PreferencesRegistry {
-    from_reflect_map: HashMap<String, ReflectFromReflect>,
-    default_map: Vec<DefaultMap>,
-}
-
-impl PreferencesRegistry {
-    fn apply_from_reflect(&self, preferences: &mut PreferencesMap) {
-        let mut new_values = Vec::new();
-
-        for value in preferences.iter_values() {
-            if let Some(type_info) = value.get_represented_type_info() {
-                let type_path = type_info.type_path();
-
-                let reflect_from_reflect =
-                    self.from_reflect_map.get(type_path).unwrap_or_else(|| {
-                        panic!("Type {type_path} not registered using `register_preferences`")
-                    });
-
-                let new_value = reflect_from_reflect
-                    .from_reflect(value)
-                    .expect("Error using ReflectFromReflect");
-
-                debug_assert!(!new_value.is_dynamic(), "Dynamic value generated");
-
-                new_values.push(new_value);
-            }
-        }
-
-        for new_value in new_values {
-            preferences.set_dyn(new_value);
-        }
-    }
-
-    fn add_defaults(&self, preferences: &mut PreferencesMap) {
-        for (type_path, default_fn) in &self.default_map {
-            preferences.set_if_missing(type_path, default_fn);
-        }
-    }
-
-    fn apply_from_reflect_and_add_defaults(&self, preferences: &mut PreferencesMap) {
-        self.apply_from_reflect(preferences);
-        self.add_defaults(preferences);
-    }
-}
-
-pub trait RegisterPreferences {
-    fn register_preferences<T>(&mut self) -> &mut Self
-    where
-        T: GetTypeRegistration + TypePath + FromReflect + Default,
-    {
-        self.register_preferences_with(T::default)
-    }
-
-    fn register_preferences_with_default<T>(&mut self, default: T) -> &mut Self
-    where
-        T: GetTypeRegistration + TypePath + FromReflect + Clone,
-    {
-        self.register_preferences_with(move || default.clone())
-    }
-
-    fn register_preferences_with<T, F>(&mut self, default_fn: F) -> &mut Self
-    where
-        T: GetTypeRegistration + TypePath + FromReflect,
-        F: Fn() -> T + Send + Sync + 'static;
-}
-
-impl RegisterPreferences for App {
-    fn register_preferences_with<T, F>(&mut self, default_fn: F) -> &mut Self
-    where
-        T: GetTypeRegistration + TypePath + FromReflect,
-        F: Fn() -> T + Send + Sync + 'static,
-    {
-        self.register_type::<T>();
-
-        if !self.world.contains_resource::<PreferencesRegistry>() {
-            self.world.init_resource::<PreferencesRegistry>();
-        }
-        let mut registry = self
-            .world
-            .get_resource_mut::<PreferencesRegistry>()
-            .unwrap();
-
-        registry.from_reflect_map.insert(
-            T::type_path().into(),
-            <ReflectFromReflect as FromType<T>>::from_type(),
-        );
-        registry.default_map.push((
-            TypePathTable::of::<T>(),
-            Box::new(move || Box::new(default_fn())),
-        ));
-
-        self
-    }
-}
-
-#[derive(Clone, Debug, Default)]
+/// Type of storage that will be used.
+/// Most use cases are covered by [`PreferencesStorageType::DefaultStorage`] and [`PreferencesStorageType::NoStorage`]
+#[derive(Clone, Default)]
 pub enum PreferencesStorageType {
+    /// No storage of any type is used
     NoStorage,
+    /// Default storage is used. In native, a default preferences path, and toml file format will be used.
+    /// In wasm, LocalStorage will be used
+    /// See [`PreferencesPlugin`] for more info.
     #[default]
     DefaultStorage,
+    /// Fully custom Preferences storage
+    Custom(Arc<dyn PreferencesStorage>),
     #[cfg(not(target_family = "wasm"))]
-    ParentDirectory(std::path::PathBuf),
+    /// File system storage using the default format (toml) in a specific parent directory
+    /// The parent directory will get preferences.toml appended to it.
+    /// Useful for tests where the parent directory can be a temporary folder.
+    FileSystemWithParentDirectory(std::path::PathBuf),
+    #[cfg(not(target_family = "wasm"))]
+    /// Store using the default file system paths, but using the specified format.
+    /// Useful if you want to only modify the format in which the files are written.
+    FileSystemWithFormat(FileStorageFormatFns),
+    #[cfg(not(target_family = "wasm"))]
+    /// Specified parent path and file format. If you want full control on where the files are stored
+    /// and in which format they are written.
+    FileSystemWithParentDirectoryAndFormat(std::path::PathBuf, FileStorageFormatFns),
 
     #[cfg(target_family = "wasm")]
+    /// Preferences will be stored in the browser local storage
     LocalStorage,
     #[cfg(target_family = "wasm")]
+    /// Preferences will be stored in the browser session storage
     SessionStorage,
 }
 
 impl PreferencesStorageType {
     #[cfg(not(target_family = "wasm"))]
-    fn storage_path(&self) -> Option<std::path::PathBuf> {
+    fn file_storage_path(&self) -> Option<std::path::PathBuf> {
         match self {
             PreferencesStorageType::NoStorage => None,
-            PreferencesStorageType::DefaultStorage => {
+            PreferencesStorageType::Custom(_) => None,
+            PreferencesStorageType::DefaultStorage
+            | PreferencesStorageType::FileSystemWithFormat(_) => {
                 Some(dirs::preference_dir().expect("Cannot resolve preference_dir"))
             }
-            PreferencesStorageType::ParentDirectory(path) => Some(path.clone()),
+            PreferencesStorageType::FileSystemWithParentDirectory(path)
+            | PreferencesStorageType::FileSystemWithParentDirectoryAndFormat(path, _) => {
+                Some(path.clone())
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn file_storage_format(&self) -> Option<FileStorageFormatFns> {
+        match self {
+            PreferencesStorageType::NoStorage => None,
+            PreferencesStorageType::Custom(_) => None,
+            PreferencesStorageType::DefaultStorage
+            | PreferencesStorageType::FileSystemWithParentDirectory(_) => {
+                Some(FileStorageFormatFns::from_format::<DefaultFileStorageFormat>())
+            }
+            PreferencesStorageType::FileSystemWithFormat(format)
+            | PreferencesStorageType::FileSystemWithParentDirectoryAndFormat(_, format) => {
+                Some(*format)
+            }
         }
     }
 
@@ -170,6 +226,7 @@ impl PreferencesStorageType {
     ) -> Option<storage::gloo::GlooStorage> {
         match self {
             PreferencesStorageType::NoStorage => None,
+            PreferencesStorageType::Custom(_) => None,
             PreferencesStorageType::DefaultStorage => {
                 Some(storage::gloo::GlooStorage::local(preferences_key))
             }
@@ -184,8 +241,38 @@ impl PreferencesStorageType {
     }
 }
 
+/// System Set used by [`PreferencesPlugin`]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, SystemSet)]
 pub enum PreferencesSet {
+    /// System set used to load preferences, it happens before [`PreStartup`].
     Load,
+    /// System set used to create resources of type [`crate::resource::Preferences`]
+    AssignResources,
+    /// Assign values into [`crate::reflect_map::PreferencesReflectMap`].
+    SetReflectMapValues,
+    /// System set used to save preferences, it happens on [`Last`].
     Save,
+}
+
+/// Marker trait to indicate that the type can work as Preferences.
+/// Is automatically implemented for anything that implements [`FromReflect`] and [`TypePath`] .
+///
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` can not be used as preferences",
+    note = "consider annotating `{Self}` with `#[derive(Reflect)]`"
+)]
+pub trait PreferencesType: FromReflect + TypePath {}
+
+impl<T> PreferencesType for T where T: FromReflect + TypePath {}
+
+/// Represents the type data registration of a [`PreferencesType`] type.
+/// It doesn't contain any data, so it only serves as a marker type to make sure
+/// a type has been registered as Preferences.
+#[derive(Clone)]
+pub struct ReflectPreferences;
+
+impl<T: PreferencesType> FromType<T> for ReflectPreferences {
+    fn from_type() -> Self {
+        Self
+    }
 }

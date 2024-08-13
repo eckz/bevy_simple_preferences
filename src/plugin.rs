@@ -1,10 +1,19 @@
-use crate::map::PreferencesMap;
-use crate::storage::PreferencesStorage;
-use crate::{PreferencesRegistry, PreferencesSet, PreferencesStorageType};
+use crate::reflect_map::PreferencesReflectMap;
+use crate::storage::{PreferencesStorage, PreferencesStorageResource};
+use std::sync::Arc;
+
+use crate::{PreferencesSet, PreferencesStorageType};
+use bevy::app::MainScheduleOrder;
+use bevy::ecs::component::Tick;
+use bevy::ecs::schedule::{ExecutorKind, ScheduleLabel};
+use bevy::ecs::system::SystemChangeTick;
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistryArc;
 
-#[derive(Clone, Debug)]
+use std::time::Duration;
+
+/// Struct responsible for deciding where to store the preferences.
+#[derive(Clone)]
 struct PreferencesStorageBuilder {
     pub app_name: Option<&'static str>,
     pub org_name: Option<&'static str>,
@@ -22,62 +31,142 @@ impl PreferencesStorageBuilder {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn get_storage_final_path(&self) -> Option<std::path::PathBuf> {
-        let preferences_dir = self.storage_type.storage_path()?;
+    fn get_storage_parent_path_and_format(
+        &self,
+    ) -> Option<(std::path::PathBuf, crate::storage::fs::FileStorageFormatFns)> {
+        let file_storage_path = self.storage_type.file_storage_path()?;
+        let file_storage_format = self.storage_type.file_storage_format()?;
         let app_name = self.full_app_name()?;
+        Some((file_storage_path.join(app_name), file_storage_format))
+    }
 
-        let final_path = preferences_dir.join(app_name).join("preferences.toml");
-        Some(final_path)
+    fn create_storage(&self) -> Option<PreferencesStorageResource> {
+        if let PreferencesStorageType::Custom(custom) = &self.storage_type {
+            return Some(PreferencesStorageResource::from_arc(custom.clone()));
+        }
+        self.create_native_storage()
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn create_storage(&self) -> Option<PreferencesStorage> {
-        let storage = self
-            .get_storage_final_path()
-            .and_then(|final_path| crate::storage::fs::FileStorage::new(final_path).ok());
+    fn create_native_storage(&self) -> Option<PreferencesStorageResource> {
+        let storage =
+            self.get_storage_parent_path_and_format()
+                .and_then(|(parent_path, format)| {
+                    crate::storage::fs::FileStorage::new_with_format(parent_path, format).ok()
+                });
 
-        storage.map(PreferencesStorage::new)
+        storage.map(PreferencesStorageResource::new)
     }
 
     #[cfg(target_family = "wasm")]
-    fn create_storage(&self) -> Option<PreferencesStorage> {
+    fn create_native_storage(&self) -> Option<PreferencesStorageResource> {
         let app_name = self.full_app_name()?;
         let storage = self
             .storage_type
             .gloo_storage(format!("{app_name}_preferences"))?;
-        Some(PreferencesStorage::new(storage))
+        Some(PreferencesStorageResource::new(storage))
     }
 }
 
-#[derive(Debug, Default)]
+/// Schedule label that is executed before PreStartup
+#[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LoadPreferences;
+
+/// Preferences Plugin that configures how preferences are stored.
+/// It should be only added by final applications, not libraries, since it's not their responsibility.
+///
+/// If you want to persist the preferences, you need to include an app_name that
+/// uniquely represents your application
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_simple_preferences::PreferencesPlugin;
+/// App::new()
+///         .add_plugins(MinimalPlugins)
+///         .add_plugins(PreferencesPlugin::persisted_with_app_name("MyPreferencesAppName"))
+/// # ;
+/// ```
+/// In case you don't want to store any preferences on disk
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_simple_preferences::PreferencesPlugin;
+/// App::new()
+///         .add_plugins(MinimalPlugins)
+///         .add_plugins(PreferencesPlugin::with_no_persistence())
+/// # ;
+/// ```
+
 pub struct PreferencesPlugin {
+    /// Name of the application, required unless storage_type is [`PreferencesStorageType::NoStorage`]
     pub app_name: Option<&'static str>,
+    /// Organization name, optional. It will be used to construct the final file name.
     pub org_name: Option<&'static str>,
+    /// Type of storage, [`PreferencesStorageType::DefaultStorage`] by default.
     pub storage_type: PreferencesStorageType,
 }
 
 impl PreferencesPlugin {
-    pub fn with_app_name(app_name: &'static str) -> Self {
+    /// Creates a [`PreferencesPlugin`] with specified app name and default storage.
+    ///
+    /// |Platform | Value                                                    | Example                                   |
+    /// | ------- | -------------------------------------------------------- | ----------------------------------------- |
+    /// | Native  | [`dirs::preference_dir`]/{app_name}/preferences.toml     | /home/alice/.config/MyApp/preferences.toml |
+    /// | Wasm    | LocalStorage:{app_name}_preferences                      | LocalStorage:MyApp_preferences            |
+    ///
+    pub fn persisted_with_app_name(app_name: &'static str) -> Self {
         Self {
             app_name: Some(app_name),
-            ..Default::default()
+            org_name: None,
+            storage_type: Default::default(),
         }
     }
 
-    pub fn without_storage() -> Self {
+    /// Creates a [`PreferencesPlugin`] that doesn't store preferences anywhere
+    /// Take into consideration that this is exactly the same as not adding the Plugin.
+    pub fn with_no_persistence() -> Self {
         Self {
+            app_name: None,
+            org_name: None,
             storage_type: PreferencesStorageType::NoStorage,
-            ..Default::default()
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    pub fn with_storage_parent_directory(
-        mut self,
-        storage_dir: impl Into<std::path::PathBuf>,
-    ) -> Self {
-        self.storage_type = PreferencesStorageType::ParentDirectory(storage_dir.into());
+    /// Specifies the storage type
+    pub fn with_storage_type(mut self, storage_type: PreferencesStorageType) -> Self {
+        self.storage_type = storage_type;
         self
+    }
+
+    /// Specifies a fully custom Preferences Storage
+    /// ```
+    /// # use bevy::prelude::*;
+    /// # use bevy_simple_preferences::PreferencesPlugin;
+    /// # use bevy_simple_preferences::reflect_map::{PreferencesReflectMap, PreferencesReflectMapDeserializeSeed};
+    /// # use bevy_simple_preferences::storage::PreferencesStorage;
+    ///
+    /// struct MyCustomStorage;
+    ///
+    /// impl PreferencesStorage for MyCustomStorage {
+    /// fn load_preferences(&self, deserialize_seed: PreferencesReflectMapDeserializeSeed) -> Result<PreferencesReflectMap, bevy_simple_preferences::PreferencesError> {
+    ///         todo!()
+    ///     }
+    ///
+    /// fn save_preferences(&self, map: &PreferencesReflectMap) -> Result<(), bevy_simple_preferences::PreferencesError> {
+    ///         todo!()
+    ///     }
+    /// }
+    ///
+    /// let app = App::new()
+    ///     .add_plugins(MinimalPlugins)
+    ///     .add_plugins(PreferencesPlugin::with_custom_storage(MyCustomStorage));
+    ///
+    /// ```
+    ///
+    pub fn with_custom_storage(storage: impl PreferencesStorage) -> Self {
+        Self {
+            app_name: None,
+            org_name: None,
+            storage_type: PreferencesStorageType::Custom(Arc::new(storage)),
+        }
     }
 
     fn storage_builder(&self) -> PreferencesStorageBuilder {
@@ -91,185 +180,119 @@ impl PreferencesPlugin {
 
 impl Plugin for PreferencesPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<PreferencesMap>();
+        {
+            let world = app.world_mut();
 
-        app.add_systems(
-            PreStartup,
-            load_preferences(self.storage_builder())
-                .in_set(PreferencesSet::Load)
-                .run_if(resource_exists::<PreferencesRegistry>),
-        );
+            let mut main_schedule_order = world.resource_mut::<MainScheduleOrder>();
+            main_schedule_order
+                .startup_labels
+                .insert(0, LoadPreferences.intern());
 
-        app.add_systems(
-            PostUpdate,
-            save_preferences.in_set(PreferencesSet::Save).run_if(
-                resource_exists::<PreferencesStorage>.and_then(
-                    resource_changed::<PreferencesMap>
-                        .and_then(not(resource_added::<PreferencesMap>)),
+            let mut schedule = Schedule::new(LoadPreferences);
+            schedule.set_executor_kind(ExecutorKind::Simple);
+            world.add_schedule(schedule);
+        }
+
+        app.register_type::<PreferencesReflectMap>()
+            .add_event::<PreferencesSaved>()
+            .add_systems(
+                LoadPreferences,
+                load_preferences(self.storage_builder()).in_set(PreferencesSet::Load),
+            )
+            .configure_sets(
+                Last,
+                PreferencesSet::SetReflectMapValues.before(PreferencesSet::Save),
+            )
+            // We need to hook on Last to catch AppExit event correctly
+            .add_systems(
+                Last,
+                save_preferences.in_set(PreferencesSet::Save).run_if(
+                    resource_exists::<PreferencesStorageResource>
+                        .and_then(resource_exists::<PreferencesReflectMap>),
                 ),
-            ),
-        );
+            );
     }
 }
 
 fn load_preferences(
     storage_builder: PreferencesStorageBuilder,
-) -> impl Fn(Commands, Res<AppTypeRegistry>, Res<PreferencesRegistry>) {
-    move |mut commands: Commands,
-          app_type_registry: Res<AppTypeRegistry>,
-          preferences_registry: Res<PreferencesRegistry>| {
-        let type_registry = TypeRegistryArc::clone(&app_type_registry);
+) -> impl Fn(Commands, Res<AppTypeRegistry>) {
+    move |mut commands: Commands, app_type_registry: Res<AppTypeRegistry>| {
+        let type_registry_arc = TypeRegistryArc::clone(&app_type_registry);
         let Some(storage) = storage_builder.create_storage() else {
-            let mut preferences = PreferencesMap::new(type_registry);
-            preferences_registry.add_defaults(&mut preferences);
-            commands.insert_resource(preferences);
             return;
         };
 
-        let seed = PreferencesMap::deserialize_seed(type_registry.clone());
+        let seed = PreferencesReflectMap::deserialize_seed(type_registry_arc.clone());
 
-        let mut preferences = match storage.load_preferences(seed) {
+        let preferences = match storage.load_preferences(seed) {
             Ok(preferences) => preferences,
             #[cfg(not(target_family = "wasm"))]
             Err(crate::PreferencesError::IoError(io_error)) => {
                 if io_error.kind() != std::io::ErrorKind::NotFound {
                     error!("I/O Error loading preferences: {io_error}");
                 }
-                PreferencesMap::new(type_registry)
+                PreferencesReflectMap::empty(type_registry_arc)
             }
             #[cfg(target_family = "wasm")]
             Err(crate::PreferencesError::GlooError(
                 gloo_storage::errors::StorageError::KeyNotFound(_),
-            )) => PreferencesMap::new(type_registry),
+            )) => PreferencesReflectMap::empty(type_registry_arc),
             Err(err) => {
-                error!("Error loading preferences: {err:?}");
-                PreferencesMap::new(type_registry)
+                error!("Unknown Error loading preferences: {err:?}");
+                PreferencesReflectMap::empty(type_registry_arc)
             }
         };
-
-        preferences_registry.apply_from_reflect_and_add_defaults(&mut preferences);
 
         commands.insert_resource(preferences);
         commands.insert_resource(storage);
     }
 }
 
-pub fn save_preferences(preferences: Res<PreferencesMap>, storage: Res<PreferencesStorage>) {
-    if let Err(err) = storage.save_preferences(&preferences) {
-        error!("Error saving preferences: {err}");
-    }
-}
+/// Event triggered every time the preferences are saved to the background
+#[derive(Event, Copy, Clone, PartialEq, Eq, Hash, Default)]
+pub struct PreferencesSaved;
 
-#[cfg(not(target_family = "wasm"))]
-#[cfg(test)]
-mod tests {
-    use bevy::prelude::*;
-    use bevy::utils::HashMap;
-    use rand::random;
+#[allow(clippy::too_many_arguments)]
+pub fn save_preferences(
+    time: Res<Time<Real>>,
+    preferences: Res<PreferencesReflectMap>,
+    storage: Res<PreferencesStorageResource>,
+    mut last_save_tick: Local<Option<Tick>>,
+    mut last_save_time: Local<Duration>,
+    system_change_tick: SystemChangeTick,
+    mut app_exit: EventReader<AppExit>,
+    mut preferences_saved: EventWriter<PreferencesSaved>,
+) {
+    let last_save_tick = last_save_tick.get_or_insert_with(|| system_change_tick.last_run());
 
-    use crate::map::{PreferencesMap, PreferencesMapDeserializeSeed};
-    use crate::storage::PreferencesStorage;
-    use crate::{PreferencesPlugin, PreferencesRegistry, RegisterPreferences};
+    let is_modified = preferences
+        .last_changed()
+        .is_newer_than(*last_save_tick, system_change_tick.this_run());
 
-    #[derive(Reflect, Debug, Default)]
-    struct MyPreferences {
-        some_string: String,
-        some_option: u32,
-    }
+    let mut should_trigger_save = is_modified;
 
-    #[derive(Reflect, Debug, Default)]
-    struct MyPreferencesMap {
-        some_map: HashMap<String, MyPreferences>,
-    }
-
-    fn load_preferences_from_world(
-        storage: &PreferencesStorage,
-        world: &World,
-    ) -> crate::Result<PreferencesMap> {
-        let type_registry_arc = world.get_resource::<AppTypeRegistry>().unwrap().0.clone();
-        let seed = PreferencesMapDeserializeSeed::new(type_registry_arc);
-        storage.load_preferences(seed)
-    }
-
-    #[test]
-    fn preferences_plugin_reads_from_disk() {
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        let mut app = App::new();
-        let type_registry = app.world.resource::<AppTypeRegistry>().0.clone();
-
-        app.register_preferences::<MyPreferences>();
-
-        let preferences_plugin = PreferencesPlugin::with_app_name("PreferencesTest")
-            .with_storage_parent_directory(temp_dir.path());
-        let storage_builder = preferences_plugin.storage_builder();
-
-        let some_option = random();
-
-        // First, we store the initial preferences
-        {
-            let storage = storage_builder.create_storage().unwrap();
-            let mut preferences = PreferencesMap::new(type_registry.clone());
-
-            let my_settings: &mut MyPreferences = preferences.get_mut_or_default();
-            my_settings.some_string = "TestReadFromDisk".into();
-            my_settings.some_option = some_option;
-
-            storage.save_preferences(&preferences).unwrap();
-        }
-
-        app.add_plugins(preferences_plugin);
-
-        app.update();
-        // We expect the preferences to have been loaded from disk
-        {
-            let preferences = app.world.get_resource::<PreferencesMap>().unwrap();
-
-            let my_preferences = preferences.get::<MyPreferences>();
-
-            assert_eq!(my_preferences.some_string, "TestReadFromDisk");
-            assert_eq!(my_preferences.some_option, some_option);
+    if is_modified {
+        let duration_since_last_save = time.elapsed() - *last_save_time;
+        if duration_since_last_save.as_secs() < 1 {
+            should_trigger_save = false;
         }
     }
 
-    #[test]
-    fn preferences_plugin_saves_to_disk() {
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        let mut app = App::new();
-
-        app.register_preferences::<MyPreferences>();
-
-        let preferences_plugin = PreferencesPlugin::with_app_name("PreferencesTest")
-            .with_storage_parent_directory(temp_dir.path());
-        let storage_builder = preferences_plugin.storage_builder();
-
-        let some_option = random();
-
-        app.add_plugins(preferences_plugin);
-
-        app.update();
-        {
-            let mut preferences = app.world.get_resource_mut::<PreferencesMap>().unwrap();
-
-            let my_settings: &mut MyPreferences = preferences.get_mut();
-            my_settings.some_string = "TestWriteToDisk".into();
-            my_settings.some_option = some_option;
+    if !app_exit.is_empty() {
+        app_exit.clear();
+        if is_modified {
+            should_trigger_save = true;
         }
+    }
 
-        // This should save to disk
-        app.update();
-
-        // We verify the preferences were stored to disk
-        {
-            let storage = storage_builder.create_storage().unwrap();
-            let mut preferences = load_preferences_from_world(&storage, &app.world).unwrap();
-            let registry = app.world.get_resource::<PreferencesRegistry>().unwrap();
-            registry.apply_from_reflect_and_add_defaults(&mut preferences);
-
-            let my_preferences = preferences.get::<MyPreferences>();
-            assert_eq!(my_preferences.some_string, "TestWriteToDisk");
-            assert_eq!(my_preferences.some_option, some_option);
+    if should_trigger_save {
+        if let Err(err) = storage.save_preferences(&preferences) {
+            error!("Error saving preferences: {err}");
+        } else {
+            preferences_saved.send_default();
         }
+        *last_save_tick = preferences.last_changed();
+        *last_save_time = time.elapsed();
     }
 }

@@ -5,11 +5,12 @@ edition = "2021"
 
 [lints.rust]
 unsafe_code = "forbid"
+missing_docs = "warn"
 
 [dependencies]
 serde = { version = "1.0" }
 thiserror = "1.0"
-bevy = { version = "0.13", default-features = false }
+bevy = { version = "0.14", default-features = false, features = ["multi_threaded"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 toml = "0.8"
@@ -21,17 +22,18 @@ gloo-storage = "0.3"
 serde_json = "1.0"
 
 [dev-dependencies]
-bevy = { version = "0.13", default-features = false, features = [
-    "multi-threaded",
+bevy = { version = "0.14", default-features = false, features = [
     "bevy_render",
     "bevy_winit",
     "webgl2",
     "x11"
 ] }
-bevy-inspector-egui = { version = "0.24", default-features = false }
+bevy-inspector-egui = { version = "0.25", default-features = false, features = ["bevy_render"] }
+egui = { version = "0.28", features = ["persistence"] }
+serde_json = "1.0"
 rand = "0.8"
 serde_test = "1.0"
-serde_assert = "0.7"
+serde_assert = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
