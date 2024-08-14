@@ -77,6 +77,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Run cargo fmt
         run: cargo doc --no-deps --examples --all-features --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
 
   # Run cargo test
   test:
@@ -99,8 +101,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Run cargo test
         run: cargo test
-        env:
-          RUSTDOCFLAGS: "-D warnings"
 
   # Run wasm-pack test
   test_wasm:
