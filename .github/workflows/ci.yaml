@@ -68,7 +68,7 @@ jobs:
 
   # Run cargo doc --no-deps --examples --all-features --document-private-items
   doc-check:
-    name: Format
+    name: Doc check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
