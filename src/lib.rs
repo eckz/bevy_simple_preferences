@@ -138,7 +138,7 @@ pub enum PreferencesError {
     UnregisteredType(String),
 
     #[cfg(target_family = "wasm")]
-    /// An error has occurred while storing in either LocalStorage or Session storage.
+    /// An error has occurred while storing in either `LocalStorage` or `SessionStorage`.
     #[error("Error getting from storage: {0}")]
     GlooError(#[from] gloo_storage::errors::StorageError),
 }
