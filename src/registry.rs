@@ -1,5 +1,5 @@
-use crate::reflect_map::PreferencesReflectMap;
 use crate::resource::PreferencesResource;
+use crate::serializable_map::PreferencesSerializableMap;
 use crate::{PreferencesSet, PreferencesType, ReflectPreferences};
 use bevy::prelude::*;
 use bevy::reflect::{GetTypeRegistration, TypeInfo, TypeRegistration, TypeRegistry};
@@ -177,7 +177,8 @@ where
                 Self::set_reflect_map_value
                     .in_set(PreferencesSet::SetReflectMapValues)
                     .run_if(
-                        preferences_changed::<T>.and_then(resource_exists::<PreferencesReflectMap>),
+                        preferences_changed::<T>
+                            .and_then(resource_exists::<PreferencesSerializableMap>),
                     ),
             );
     }
@@ -196,7 +197,7 @@ where
 {
     fn assign_initial_value(
         default_value: T,
-    ) -> impl FnMut(Commands, Option<ResMut<PreferencesReflectMap>>) {
+    ) -> impl FnMut(Commands, Option<ResMut<PreferencesSerializableMap>>) {
         let mut default_value = Some(default_value);
         move |mut commands, storage_map| {
             let stored_value: Option<T> =
@@ -213,7 +214,7 @@ where
 
     fn set_reflect_map_value(
         value: Res<PreferencesResource<T>>,
-        mut storage_map: ResMut<PreferencesReflectMap>,
+        mut storage_map: ResMut<PreferencesSerializableMap>,
     ) {
         let cloned_value = T::from_reflect(&**value).expect("Error while trying to clone value");
         storage_map.set(cloned_value);
@@ -222,7 +223,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::reflect_map::PreferencesReflectMap;
+    use crate::serializable_map::PreferencesSerializableMap;
     use crate::{Preferences, PreferencesSet, RegisterPreferencesExt};
     use bevy::prelude::*;
 
@@ -268,7 +269,7 @@ mod tests {
 
         let mut reflect_map = {
             let type_registry_arc = app.world().resource::<AppTypeRegistry>().0.clone();
-            PreferencesReflectMap::empty(type_registry_arc)
+            PreferencesSerializableMap::empty(type_registry_arc)
         };
 
         reflect_map.set(MyPreferences {
@@ -286,13 +287,13 @@ mod tests {
     fn test_register_preferences_saves_back_to_reflect_map() {
         App::new()
             .register_preferences::<MyPreferences>()
-            .init_resource::<PreferencesReflectMap>()
+            .init_resource::<PreferencesSerializableMap>()
             .add_systems(Update, |mut pref: Preferences<MyPreferences>| {
                 pref.value = "ValueFromSystem";
             })
             .add_systems(
                 Last,
-                (|map: Res<PreferencesReflectMap>| {
+                (|map: Res<PreferencesSerializableMap>| {
                     assert_eq!(map.get::<MyPreferences>().unwrap().value, "ValueFromSystem");
                 })
                 .after(PreferencesSet::SetReflectMapValues),

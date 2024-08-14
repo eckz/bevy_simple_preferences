@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Run cargo clippy -- -D warnings
+  # Run cargo clippy --all-targets -- -D warnings
   check:
     strategy:
       matrix:
@@ -50,7 +50,7 @@ jobs:
       - name: Run cargo check
         run: cargo check --target ${{ matrix.target }}
       - name: Run clippy
-        run: cargo clippy --target ${{ matrix.target }} --tests -- -D warnings
+        run: cargo clippy --target ${{ matrix.target }} --all-targets  -- -D warnings
 
   # Run cargo fmt --all -- --check
   format:
@@ -66,6 +66,17 @@ jobs:
       - name: Run cargo fmt
         run: cargo fmt --all -- --check
 
+  # Run cargo doc --no-deps --examples --all-features --document-private-items
+  doc-check:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run cargo fmt
+        run: cargo doc --no-deps --examples --all-features --document-private-items
 
   # Run cargo test
   test:
@@ -88,6 +99,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Run cargo test
         run: cargo test
+        env:
+          RUSTDOCFLAGS: "-D warnings"
 
   # Run wasm-pack test
   test_wasm:

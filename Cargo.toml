@@ -1,11 +1,20 @@
 [package]
 name = "bevy_simple_preferences"
-version = "0.0.1-dev"
+version = "0.1.0"
 edition = "2021"
+description = "A simple Preferences API for Bevy"
+license = "MIT OR Apache-2.0"
+categories = ["games", "game-development"]
+keywords = ["preferences", "bevy"]
+repository = "https://github.com/eckz/bevy_simple_preferences"
+rust-version = "1.80.0"
 
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+
+[lints.clippy]
+doc_markdown = "warn"
 
 [dependencies]
 serde = { version = "1.0" }

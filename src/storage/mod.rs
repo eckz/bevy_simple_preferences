@@ -9,7 +9,7 @@ pub mod fs;
 #[cfg(target_family = "wasm")]
 pub(crate) mod gloo;
 
-use crate::reflect_map::{PreferencesReflectMap, PreferencesReflectMapDeserializeSeed};
+use crate::serializable_map::{PreferencesSerializableMap, PreferencesSerializableMapSeed};
 use crate::Result;
 use bevy::prelude::*;
 use std::ops::Deref;
@@ -18,14 +18,14 @@ use std::sync::Arc;
 /// Trait used to represent how preferences are loaded and saved.
 /// Final applications can have custom storages by implementing this trait.
 pub trait PreferencesStorage: Send + Sync + 'static {
-    /// Loads the preferences using the [`PreferencesReflectMapDeserializeSeed`] passed as a value.
+    /// Loads the preferences using the [`PreferencesSerializableMapSeed`] passed as a value.
     fn load_preferences(
         &self,
-        deserialize_seed: PreferencesReflectMapDeserializeSeed,
-    ) -> Result<PreferencesReflectMap>;
+        deserialize_seed: PreferencesSerializableMapSeed,
+    ) -> Result<PreferencesSerializableMap>;
 
     /// Saves the preferences
-    fn save_preferences(&self, map: &PreferencesReflectMap) -> Result<()>;
+    fn save_preferences(&self, map: &PreferencesSerializableMap) -> Result<()>;
 }
 
 /// Represents the current Preferences storage used.

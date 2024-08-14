@@ -5,6 +5,7 @@
 //! relay in a simple preferences abstraction giving the final app crate full control on how
 //! and where to store the preferences.
 //!
+//! This crate is heavily based on the [Bevy Preferences API proposal](https://github.com/bevyengine/bevy/issues/13311).
 //!
 //! # Examples
 //!
@@ -12,7 +13,6 @@
 //! ```
 //!# use bevy::prelude::*;
 //!# use bevy_simple_preferences::*;
-//!
 //! #[derive(Reflect, Default)]
 //! struct ExampleSettings {
 //!     field_u32: u32,
@@ -25,12 +25,10 @@
 //! ```
 //!# use bevy::prelude::*;
 //!# use bevy_simple_preferences::*;
-//!
 //!# #[derive(Reflect, Default)]
 //!# struct ExampleSettings {
 //!#     field_u32: u32,
 //!# }
-//!
 //! App::new()
 //!     .add_plugins(PreferencesPlugin::persisted_with_app_name("YourAppName"))
 //!     .register_preferences::<ExampleSettings>();
@@ -45,12 +43,10 @@
 //! ```
 //!# use bevy::prelude::*;
 //!# use bevy_simple_preferences::*;
-//!
 //!# #[derive(Reflect, Default)]
 //!# struct MyCratePreferences {
 //!#     some_field: i32,
 //!# }
-//!
 //!# struct MyCratePlugin;
 //!
 //! impl Plugin for MyCratePlugin {
@@ -67,10 +63,9 @@
 //! ```
 //!
 //! # Supported Bevy Versions
-
-//! | Bevy | bevy_simple_preferences |
-//! | ---- | ----------------------- |
-//! | 0.14 | 0.1                     |
+//!| Bevy | `bevy_simple_preferences` |
+//!| ---- | -----------------------   |
+//!| 0.14 | 0.1                       |
 //!
 //! # Details
 //! [`PreferencesPlugin`] is responsible to define where the preferences are stored,
@@ -79,10 +74,10 @@
 //! ## Storage path
 //! By default, the following paths are used to store the preferences
 //!
-//! |Platform | Value                                                    | Example                                   |
-//! | ------- | -------------------------------------------------------- | ----------------------------------------- |
-//! | Native  | [`dirs::preference_dir`]/{app_name}/preferences.toml     | /home/alice/.config/MyApp/preferences.toml |
-//! | Wasm    | LocalStorage:{app_name}_preferences                      | LocalStorage:MyApp_preferences            |
+//!|Platform | Value                                                    | Example                                   |
+//!| ------- | -------------------------------------------------------- | ----------------------------------------- |
+//!| Native  | `dirs::preference_dir/{app_name}/preferences.toml`       | /home/alice/.config/MyApp/preferences.toml |
+//!| Wasm    | `LocalStorage:{app_name}_preferences`                    | `LocalStorage:MyApp_preferences`          |
 //!
 //! Final user can personalize this paths by using [`PreferencesPlugin::with_storage_type`] and use any convinient
 //! value of [`PreferencesStorageType`].
@@ -90,22 +85,22 @@
 //! ## Storage format
 //!
 //! By default, the following formats are used:
-//! |Platform | Format      | Example                                   |
-//! | ------- | ----------- | ----------------------------------------- |
-//! | Native  | `toml`      | [MyPluginPreferences]\nvalue = 3          |
-//! | Wasm    | `json`      | { "MyPluginPreferences": { "value": 3 } } |
+//!
+//!| Platform | Format      | Example                                     |
+//!| -------- | ----------- | ------------------------------------------- |
+//!| Native   | `toml`      | `[MyPluginPreferences]\nvalue = 3`          |
+//!| Wasm     | `json`      | `{ "MyPluginPreferences": { "value": 3 } }` |
+//!
 //! A different format (only for native) can be configured by implementing [`crate::storage::fs::FileStorageFormat`];
 //!
 //! Go to the [`crate::storage::fs::FileStorageFormat`] documentation for more information on how to do it.
 //!
-//!
-
 use bevy::prelude::*;
 use bevy::reflect::FromType;
 use std::sync::Arc;
 use thiserror::Error;
 
-pub mod reflect_map;
+pub mod serializable_map;
 
 mod plugin;
 mod registry;
@@ -157,7 +152,7 @@ pub enum PreferencesStorageType {
     /// No storage of any type is used
     NoStorage,
     /// Default storage is used. In native, a default preferences path, and toml file format will be used.
-    /// In wasm, LocalStorage will be used
+    /// In wasm, `LocalStorage` will be used
     /// See [`PreferencesPlugin`] for more info.
     #[default]
     DefaultStorage,
@@ -247,7 +242,7 @@ pub enum PreferencesSet {
     Load,
     /// System set used to create resources of type [`crate::resource::Preferences`]
     AssignResources,
-    /// Assign values into [`crate::reflect_map::PreferencesReflectMap`].
+    /// Assign values into [`crate::serializable_map::PreferencesSerializableMap`].
     SetReflectMapValues,
     /// System set used to save preferences, it happens on [`Last`].
     Save,

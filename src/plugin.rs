@@ -1,4 +1,4 @@
-use crate::reflect_map::PreferencesReflectMap;
+use crate::serializable_map::PreferencesSerializableMap;
 use crate::storage::{PreferencesStorage, PreferencesStorageResource};
 use std::sync::Arc;
 
@@ -68,14 +68,14 @@ impl PreferencesStorageBuilder {
     }
 }
 
-/// Schedule label that is executed before PreStartup
+/// Schedule label that is executed before `PreStartup`
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LoadPreferences;
 
 /// Preferences Plugin that configures how preferences are stored.
 /// It should be only added by final applications, not libraries, since it's not their responsibility.
 ///
-/// If you want to persist the preferences, you need to include an app_name that
+/// If you want to persist the preferences, you need to include an `app_name` that
 /// uniquely represents your application
 /// ```
 /// # use bevy::prelude::*;
@@ -96,7 +96,7 @@ pub struct LoadPreferences;
 /// ```
 
 pub struct PreferencesPlugin {
-    /// Name of the application, required unless storage_type is [`PreferencesStorageType::NoStorage`]
+    /// Name of the application, required unless `storage_type` is [`PreferencesStorageType::NoStorage`]
     pub app_name: Option<&'static str>,
     /// Organization name, optional. It will be used to construct the final file name.
     pub org_name: Option<&'static str>,
@@ -109,8 +109,8 @@ impl PreferencesPlugin {
     ///
     /// |Platform | Value                                                    | Example                                   |
     /// | ------- | -------------------------------------------------------- | ----------------------------------------- |
-    /// | Native  | [`dirs::preference_dir`]/{app_name}/preferences.toml     | /home/alice/.config/MyApp/preferences.toml |
-    /// | Wasm    | LocalStorage:{app_name}_preferences                      | LocalStorage:MyApp_preferences            |
+    /// | Native  | `{dirs::preference_dir}/{app_name}/preferences.toml`     | /home/alice/.config/MyApp/preferences.toml |
+    /// | Wasm    | `LocalStorage:{app_name}_preferences`                    | `LocalStorage:MyApp_preferences`          |
     ///
     pub fn persisted_with_app_name(app_name: &'static str) -> Self {
         Self {
@@ -140,17 +140,17 @@ impl PreferencesPlugin {
     /// ```
     /// # use bevy::prelude::*;
     /// # use bevy_simple_preferences::PreferencesPlugin;
-    /// # use bevy_simple_preferences::reflect_map::{PreferencesReflectMap, PreferencesReflectMapDeserializeSeed};
+    /// # use bevy_simple_preferences::serializable_map::{PreferencesSerializableMap, PreferencesSerializableMapSeed};
     /// # use bevy_simple_preferences::storage::PreferencesStorage;
     ///
     /// struct MyCustomStorage;
     ///
     /// impl PreferencesStorage for MyCustomStorage {
-    /// fn load_preferences(&self, deserialize_seed: PreferencesReflectMapDeserializeSeed) -> Result<PreferencesReflectMap, bevy_simple_preferences::PreferencesError> {
+    /// fn load_preferences(&self, deserialize_seed: PreferencesSerializableMapSeed) -> Result<PreferencesSerializableMap, bevy_simple_preferences::PreferencesError> {
     ///         todo!()
     ///     }
     ///
-    /// fn save_preferences(&self, map: &PreferencesReflectMap) -> Result<(), bevy_simple_preferences::PreferencesError> {
+    /// fn save_preferences(&self, map: &PreferencesSerializableMap) -> Result<(), bevy_simple_preferences::PreferencesError> {
     ///         todo!()
     ///     }
     /// }
@@ -193,8 +193,7 @@ impl Plugin for PreferencesPlugin {
             world.add_schedule(schedule);
         }
 
-        app.register_type::<PreferencesReflectMap>()
-            .add_event::<PreferencesSaved>()
+        app.add_event::<PreferencesSaved>()
             .add_systems(
                 LoadPreferences,
                 load_preferences(self.storage_builder()).in_set(PreferencesSet::Load),
@@ -208,7 +207,7 @@ impl Plugin for PreferencesPlugin {
                 Last,
                 save_preferences.in_set(PreferencesSet::Save).run_if(
                     resource_exists::<PreferencesStorageResource>
-                        .and_then(resource_exists::<PreferencesReflectMap>),
+                        .and_then(resource_exists::<PreferencesSerializableMap>),
                 ),
             );
     }
@@ -223,7 +222,7 @@ fn load_preferences(
             return;
         };
 
-        let seed = PreferencesReflectMap::deserialize_seed(type_registry_arc.clone());
+        let seed = PreferencesSerializableMap::deserialize_seed(type_registry_arc.clone());
 
         let preferences = match storage.load_preferences(seed) {
             Ok(preferences) => preferences,
@@ -232,15 +231,15 @@ fn load_preferences(
                 if io_error.kind() != std::io::ErrorKind::NotFound {
                     error!("I/O Error loading preferences: {io_error}");
                 }
-                PreferencesReflectMap::empty(type_registry_arc)
+                PreferencesSerializableMap::empty(type_registry_arc)
             }
             #[cfg(target_family = "wasm")]
             Err(crate::PreferencesError::GlooError(
                 gloo_storage::errors::StorageError::KeyNotFound(_),
-            )) => PreferencesReflectMap::empty(type_registry_arc),
+            )) => PreferencesSerializableMap::empty(type_registry_arc),
             Err(err) => {
                 error!("Unknown Error loading preferences: {err:?}");
-                PreferencesReflectMap::empty(type_registry_arc)
+                PreferencesSerializableMap::empty(type_registry_arc)
             }
         };
 
@@ -256,7 +255,7 @@ pub struct PreferencesSaved;
 #[allow(clippy::too_many_arguments)]
 pub fn save_preferences(
     time: Res<Time<Real>>,
-    preferences: Res<PreferencesReflectMap>,
+    preferences: Res<PreferencesSerializableMap>,
     storage: Res<PreferencesStorageResource>,
     mut last_save_tick: Local<Option<Tick>>,
     mut last_save_time: Local<Duration>,

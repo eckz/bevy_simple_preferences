@@ -11,7 +11,7 @@ use bevy::log::*;
 use serde::de::DeserializeSeed;
 use tempfile::NamedTempFile;
 
-use crate::reflect_map::{PreferencesReflectMap, PreferencesReflectMapDeserializeSeed};
+use crate::serializable_map::{PreferencesSerializableMap, PreferencesSerializableMapSeed};
 use crate::storage::PreferencesStorage;
 use crate::{PreferencesError, Result};
 
@@ -38,15 +38,15 @@ pub(crate) fn write_atomically(
 /// # use serde::de::DeserializeSeed;
 /// # use bevy_simple_preferences::{PreferencesError};
 /// # use bevy_simple_preferences::storage::fs::FileStorageFormat;
-/// # use bevy_simple_preferences::reflect_map::{PreferencesReflectMap, PreferencesReflectMapDeserializeSeed};
+/// # use bevy_simple_preferences::serializable_map::{PreferencesSerializableMap, PreferencesSerializableMapSeed};
 ///
 /// struct MyJsonFormat;
 /// impl FileStorageFormat for MyJsonFormat {
-///    fn serialize_preferences(map: &PreferencesReflectMap) -> Result<String, PreferencesError> {
+///    fn serialize_preferences(map: &PreferencesSerializableMap) -> Result<String, PreferencesError> {
 ///         serde_json::to_string(map).map_err(|json_err| PreferencesError::SerializationError(json_err.into()))
 ///     }
 ///
-///    fn deserialize_preferences(deserialize_seed: PreferencesReflectMapDeserializeSeed, input: &str) -> Result<PreferencesReflectMap, PreferencesError> {
+///    fn deserialize_preferences(deserialize_seed: PreferencesSerializableMapSeed, input: &str) -> Result<PreferencesSerializableMap, PreferencesError> {
 ///         let mut deserializer = serde_json::de::Deserializer::from_str(input);
 ///         deserialize_seed.deserialize(&mut deserializer).map_err(|json_err| PreferencesError::DeserializationError(json_err.into()))
 ///     }
@@ -58,13 +58,13 @@ pub(crate) fn write_atomically(
 /// ```
 pub trait FileStorageFormat {
     /// Serialize the preferences map into a String
-    fn serialize_preferences(map: &PreferencesReflectMap) -> Result<String>;
+    fn serialize_preferences(map: &PreferencesSerializableMap) -> Result<String>;
 
     /// Deserialize the preferences map from a string
     fn deserialize_preferences(
-        deserialize_seed: PreferencesReflectMapDeserializeSeed,
+        deserialize_seed: PreferencesSerializableMapSeed,
         input: &str,
-    ) -> Result<PreferencesReflectMap>;
+    ) -> Result<PreferencesSerializableMap>;
 
     /// Default file name, e.g: `preferences.json`
     fn file_name() -> &'static str;
@@ -73,9 +73,9 @@ pub trait FileStorageFormat {
 /// Virtual table that represents a single [`FileStorageFormat`] type.
 #[derive(Copy, Clone)]
 pub struct FileStorageFormatFns {
-    serialize_preferences: fn(&PreferencesReflectMap) -> Result<String>,
+    serialize_preferences: fn(&PreferencesSerializableMap) -> Result<String>,
     deserialize_preferences:
-        fn(PreferencesReflectMapDeserializeSeed, input: &str) -> Result<PreferencesReflectMap>,
+        fn(PreferencesSerializableMapSeed, input: &str) -> Result<PreferencesSerializableMap>,
     file_name: &'static str,
 }
 
@@ -96,14 +96,14 @@ pub(crate) type DefaultFileStorageFormat = TomlFormat;
 pub struct TomlFormat;
 
 impl FileStorageFormat for TomlFormat {
-    fn serialize_preferences(map: &PreferencesReflectMap) -> Result<String> {
+    fn serialize_preferences(map: &PreferencesSerializableMap) -> Result<String> {
         toml::to_string_pretty(map).map_err(|err| PreferencesError::SerializationError(err.into()))
     }
 
     fn deserialize_preferences(
-        deserialize_seed: PreferencesReflectMapDeserializeSeed,
+        deserialize_seed: PreferencesSerializableMapSeed,
         input: &str,
-    ) -> Result<PreferencesReflectMap> {
+    ) -> Result<PreferencesSerializableMap> {
         deserialize_seed
             .deserialize(toml::de::Deserializer::new(input))
             .map_err(|err| PreferencesError::DeserializationError(err.into()))
@@ -148,14 +148,14 @@ impl FileStorage {
 impl PreferencesStorage for FileStorage {
     fn load_preferences(
         &self,
-        deserialize_seed: PreferencesReflectMapDeserializeSeed,
-    ) -> Result<PreferencesReflectMap> {
+        deserialize_seed: PreferencesSerializableMapSeed,
+    ) -> Result<PreferencesSerializableMap> {
         let contents = std::fs::read_to_string(&self.path)?;
         info!("Loading preferences from {}", self.path.display());
         (self.format.deserialize_preferences)(deserialize_seed, &contents)
     }
 
-    fn save_preferences(&self, map: &PreferencesReflectMap) -> Result<()> {
+    fn save_preferences(&self, map: &PreferencesSerializableMap) -> Result<()> {
         debug!("Storing preferences to {}", self.path.display());
 
         let output = (self.format.serialize_preferences)(map)?;
@@ -171,7 +171,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileStorage, PreferencesStorage};
-    use crate::reflect_map::PreferencesReflectMap;
+    use crate::serializable_map::PreferencesSerializableMap;
     use crate::ReflectPreferences;
 
     #[derive(Reflect, PartialEq, Debug, Default)]
@@ -205,7 +205,7 @@ mod tests {
 
         let storage = FileStorage::new(temp_dir.path()).unwrap();
 
-        let mut written_map = PreferencesReflectMap::empty(registry.clone());
+        let mut written_map = PreferencesSerializableMap::empty(registry.clone());
 
         written_map.set(Foo {
             size: 3,
@@ -216,7 +216,7 @@ mod tests {
         storage.save_preferences(&written_map).unwrap();
 
         let read_map = storage
-            .load_preferences(PreferencesReflectMap::deserialize_seed(registry))
+            .load_preferences(PreferencesSerializableMap::deserialize_seed(registry))
             .unwrap();
 
         assert_eq!(read_map, written_map);

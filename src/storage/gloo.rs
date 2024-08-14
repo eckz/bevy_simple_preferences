@@ -1,4 +1,4 @@
-use crate::reflect_map::{PreferencesReflectMap, PreferencesReflectMapDeserializeSeed};
+use crate::serializable_map::{PreferencesSerializableMap, PreferencesSerializableMapSeed};
 use bevy::log::*;
 use serde::de::DeserializeSeed;
 
@@ -15,8 +15,8 @@ pub(crate) struct GlooStorage {
     storage_type: GlooStorageType,
     preferences_key: String,
     load_preferences:
-        fn(&str, PreferencesReflectMapDeserializeSeed) -> Result<PreferencesReflectMap>,
-    save_preferences: fn(&str, map: &PreferencesReflectMap) -> Result<()>,
+        fn(&str, PreferencesSerializableMapSeed) -> Result<PreferencesSerializableMap>,
+    save_preferences: fn(&str, map: &PreferencesSerializableMap) -> Result<()>,
 }
 
 impl GlooStorage {
@@ -44,14 +44,14 @@ impl GlooStorage {
 impl PreferencesStorage for GlooStorage {
     fn load_preferences(
         &self,
-        seed: PreferencesReflectMapDeserializeSeed,
-    ) -> Result<PreferencesReflectMap> {
+        seed: PreferencesSerializableMapSeed,
+    ) -> Result<PreferencesSerializableMap> {
         let preferences = (self.load_preferences)(&self.preferences_key, seed)?;
         info!("Loaded preferences from {:?}Storage", self.storage_type);
         Ok(preferences)
     }
 
-    fn save_preferences(&self, map: &PreferencesReflectMap) -> Result<()> {
+    fn save_preferences(&self, map: &PreferencesSerializableMap) -> Result<()> {
         (self.save_preferences)(&self.preferences_key, map)?;
         debug!("Saved preferences on {:?}Storage", self.storage_type);
         Ok(())
@@ -60,14 +60,14 @@ impl PreferencesStorage for GlooStorage {
 
 fn load_preferences<T: gloo_storage::Storage>(
     key: &str,
-    seed: PreferencesReflectMapDeserializeSeed,
-) -> Result<PreferencesReflectMap> {
+    seed: PreferencesSerializableMapSeed,
+) -> Result<PreferencesSerializableMap> {
     Ok(T::get_by_seed(key, seed)?)
 }
 
 fn save_preferences<T: gloo_storage::Storage>(
     key: &str,
-    map: &PreferencesReflectMap,
+    map: &PreferencesSerializableMap,
 ) -> Result<()> {
     T::set(key, map)?;
     Ok(())
