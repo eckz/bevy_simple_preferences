@@ -1,3 +1,4 @@
+//! End-to-end test
 mod utils;
 
 use bevy::prelude::*;

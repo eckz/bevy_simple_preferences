@@ -107,7 +107,7 @@ fn store_egui_memory(
     mut egui_preferences: Preferences<EguiPreferences>,
 ) {
     let ctx = egui_contexts.ctx_mut();
-    let memory = ctx.memory(|memory| serde_json::to_string(memory).unwrap());
+    let memory = ctx.memory(|memory| ron::to_string(memory).unwrap());
     *egui_preferences = EguiPreferences { memory };
 }
 
@@ -117,7 +117,7 @@ fn restore_egui_memory(
 ) {
     let ctx = egui_contexts.ctx_mut();
 
-    if let Ok(new_memory) = serde_json::from_str(&egui_preferences.memory) {
+    if let Ok(new_memory) = ron::from_str(&egui_preferences.memory) {
         ctx.memory_mut(move |memory| *memory = new_memory);
     }
 }

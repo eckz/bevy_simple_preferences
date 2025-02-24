@@ -94,7 +94,6 @@ pub struct LoadPreferences;
 ///         .add_plugins(PreferencesPlugin::with_no_persistence())
 /// # ;
 /// ```
-
 pub struct PreferencesPlugin {
     /// Name of the application, required unless `storage_type` is [`PreferencesStorageType::NoStorage`]
     pub app_name: Option<&'static str>,
@@ -207,7 +206,7 @@ impl Plugin for PreferencesPlugin {
                 Last,
                 save_preferences.in_set(PreferencesSet::Save).run_if(
                     resource_exists::<PreferencesStorageResource>
-                        .and_then(resource_exists::<PreferencesSerializableMap>),
+                        .and(resource_exists::<PreferencesSerializableMap>),
                 ),
             );
     }

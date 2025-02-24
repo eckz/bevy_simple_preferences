@@ -35,7 +35,7 @@ pub struct Preferences<'w, T: PreferencesType> {
     resource: ResMut<'w, PreferencesResource<T>>,
 }
 
-impl<'w, T> Deref for Preferences<'w, T>
+impl<T> Deref for Preferences<'_, T>
 where
     T: PreferencesType,
 {
@@ -46,7 +46,7 @@ where
     }
 }
 
-impl<'w, T> DerefMut for Preferences<'w, T>
+impl<T> DerefMut for Preferences<'_, T>
 where
     T: PreferencesType,
 {
@@ -55,7 +55,7 @@ where
     }
 }
 
-impl<'w, T> PartialEq<T> for Preferences<'w, T>
+impl<T> PartialEq<T> for Preferences<'_, T>
 where
     T: PreferencesType + PartialEq,
 {

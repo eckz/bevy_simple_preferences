@@ -117,7 +117,10 @@ impl PartialEq for PreferencesSerializableMap {
             if k1 != k2 {
                 return false;
             }
-            if !v1.reflect_partial_eq(v2.as_reflect()).unwrap_or(false) {
+            if !v1
+                .reflect_partial_eq(v2.as_partial_reflect())
+                .unwrap_or(false)
+            {
                 return false;
             }
         }
@@ -161,7 +164,7 @@ impl PreferencesSerializableMap {
     /// Creates a storage map using the specified dynamic values.
     /// Values are converted into concrete types using the `FromReflect` implementation.
     pub fn from_dynamic_values(
-        values: impl IntoIterator<Item = (String, Box<dyn Reflect>)>,
+        values: impl IntoIterator<Item = (String, Box<dyn PartialReflect>)>,
         type_registry_arc: TypeRegistryArc,
     ) -> Self {
         let values = values.into_iter();
@@ -171,19 +174,19 @@ impl PreferencesSerializableMap {
             let type_registry = type_registry_arc.read();
 
             values
-                .map(|(key, value)| {
+                .flat_map(|(key, value)| {
                     if let Some(type_info) = value.get_represented_type_info() {
                         let registry_data =
                             PreferencesRegistryData::from_type_info(&type_registry, type_info);
 
-                        let new_value = registry_data.apply_from_reflect(value);
+                        let new_value = registry_data.convert_to_concrete_type(value);
 
                         debug_assert!(!new_value.is_dynamic(), "Dynamic value generated");
 
-                        (key, new_value)
+                        Some((key, new_value))
                     } else {
-                        // TODO: Should we panic instead?, or at least ignore the value
-                        (key, value)
+                        // TODO: Should we panic instead?, or at least a warning
+                        None
                     }
                 })
                 .collect()
@@ -200,7 +203,7 @@ impl PreferencesSerializableMap {
         effective_type_path(T::type_path(), T::short_type_path(), &type_registry)
     }
 
-    fn effective_type_path_from_dyn<'a>(&self, value: &'a dyn Reflect) -> &'a str {
+    fn effective_type_path_from_dyn<'a>(&self, value: &'a dyn PartialReflect) -> &'a str {
         let type_registry = self.type_registry_arc.read();
         effective_type_path(
             value.reflect_type_path(),
@@ -227,7 +230,7 @@ impl PreferencesSerializableMap {
     }
 
     /// Set preferences entry from a boxed trait object of unknown type.
-    pub fn set_dyn(&mut self, value: Box<dyn Reflect>) {
+    pub fn set_dyn(&mut self, value: Box<dyn PartialReflect>) {
         if value.is_dynamic() {
             let type_info = value
                 .get_represented_type_info()
@@ -238,15 +241,22 @@ impl PreferencesSerializableMap {
             let type_registry = &self.type_registry_arc.read();
             let registry_data = PreferencesRegistryData::from_type_info(type_registry, type_info);
 
-            let value = registry_data.apply_from_reflect(value);
+            let value = registry_data.convert_to_concrete_type(value);
 
             self.values.insert(key.to_owned(), value);
         } else {
-            self.values.insert(
-                self.effective_type_path_from_dyn(value.as_reflect())
-                    .to_owned(),
-                value,
-            );
+            match value.try_into_reflect() {
+                Ok(value) => {
+                    self.values.insert(
+                        self.effective_type_path_from_dyn(value.as_partial_reflect())
+                            .to_owned(),
+                        value,
+                    );
+                }
+                Err(_) => {
+                    panic!("PartialReflect cannot be converted into Reflect")
+                }
+            }
         }
     }
 
@@ -309,7 +319,8 @@ impl Serialize for PreferencesSerializableMap {
         let mut map_serializer = serializer.serialize_map(Some(values.len()))?;
 
         for (type_path, value) in values.iter() {
-            let reflect_serializer = TypedReflectSerializer::new(&**value, &type_registry);
+            let reflect_serializer =
+                TypedReflectSerializer::new(value.as_partial_reflect(), &type_registry);
             map_serializer.serialize_entry(type_path, &reflect_serializer)?;
         }
 
@@ -351,7 +362,7 @@ impl<'de> DeserializeSeed<'de> for PreferencesSerializableMapSeed {
         }
 
         impl<'de> Visitor<'de> for MapVisitor {
-            type Value = BTreeMap<String, Box<dyn Reflect>>;
+            type Value = BTreeMap<String, Box<dyn PartialReflect>>;
 
             fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
                 formatter.write_str("a map")
@@ -482,7 +493,7 @@ mod tests {
                 field: 4,
                 option: Some(2),
             })
-            .into_reflect(),
+            .into_partial_reflect(),
         );
 
         let value: &Foo = map.get().unwrap();
@@ -571,12 +582,8 @@ mod tests {
             &[
                 Token::Map { len: Some(1) },
                 Token::Str("Bar"),
-                Token::TupleStruct {
-                    name: "Bar",
-                    len: 1,
-                },
+                Token::NewtypeStruct { name: "Bar" },
                 Token::Str("Hello"),
-                Token::TupleStructEnd,
                 Token::MapEnd,
             ],
         );
@@ -595,19 +602,11 @@ mod tests {
             &[
                 Token::Map { len: Some(2) },
                 Token::Str("bevy_simple_preferences::serializable_map::tests::Bar"),
-                Token::TupleStruct {
-                    name: "Bar",
-                    len: 1,
-                },
+                Token::NewtypeStruct { name: "Bar" },
                 Token::Str("Bar"),
-                Token::TupleStructEnd,
                 Token::Str("bevy_simple_preferences::serializable_map::tests::ambiguous::Bar"),
-                Token::TupleStruct {
-                    name: "Bar",
-                    len: 1,
-                },
+                Token::NewtypeStruct { name: "Bar" },
                 Token::Str("ambiguousBar"),
-                Token::TupleStructEnd,
                 Token::MapEnd,
             ],
         );
@@ -628,12 +627,8 @@ mod tests {
                 Token::Map { len: Some(2) },
                 // Bar
                 Token::Str("Bar"),
-                Token::TupleStruct {
-                    name: "Bar",
-                    len: 1,
-                },
+                Token::NewtypeStruct { name: "Bar" },
                 Token::Str("Hello"),
-                Token::TupleStructEnd,
                 // Foo
                 Token::Str("Foo"),
                 Token::Struct {

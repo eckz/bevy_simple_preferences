@@ -2,7 +2,7 @@ use crate::resource::PreferencesResource;
 use crate::serializable_map::PreferencesSerializableMap;
 use crate::{PreferencesSet, PreferencesType, ReflectPreferences};
 use bevy::prelude::*;
-use bevy::reflect::{GetTypeRegistration, TypeInfo, TypeRegistration, TypeRegistry};
+use bevy::reflect::{Reflectable, TypeInfo, TypeRegistration, TypeRegistry};
 use std::any::TypeId;
 use std::sync::Mutex;
 
@@ -62,14 +62,21 @@ impl<'a> PreferencesRegistryData<'a> {
         }
     }
 
-    pub fn apply_from_reflect(&self, value: Box<dyn Reflect>) -> Box<dyn Reflect> {
-        if value.as_any().type_id() == self.type_id {
-            return value;
-        }
+    pub fn convert_to_concrete_type(&self, value: Box<dyn PartialReflect>) -> Box<dyn Reflect> {
+        let value = match value.try_into_reflect() {
+            Ok(value) => {
+                if value.as_any().type_id() == self.type_id {
+                    return value;
+                }
+                value.into_partial_reflect()
+            }
+            Err(value) => value,
+        };
+
         let type_path = value.reflect_type_path();
 
         self.from_reflect
-            .from_reflect(value.as_reflect())
+            .from_reflect(&*value)
             .or_else(|| {
                 debug!(
                     "FromReflect did not work for type :{type_path}\nValue:{:#?}",
@@ -78,7 +85,7 @@ impl<'a> PreferencesRegistryData<'a> {
 
                 if let Some(reflect_default) = self.default {
                     let mut default_value = reflect_default.default();
-                    match default_value.try_apply(value.as_reflect()) {
+                    match default_value.try_apply(value.as_partial_reflect()) {
                         Ok(_) => Some(default_value),
                         Err(err) => {
                             error!("try_apply did not work for type: {type_path}: {err}");
@@ -103,21 +110,21 @@ pub trait RegisterPreferencesExt {
     #[track_caller]
     fn register_preferences<T>(&mut self) -> &mut Self
     where
-        T: GetTypeRegistration + PreferencesType + Default;
+        T: Reflectable + PreferencesType + Default;
 
     /// Registers a type as a [`PreferencesType`] type.
     /// Uses the specified value if nothing is loaded from disk.
     #[track_caller]
     fn register_preferences_with_default_value<T>(&mut self, default_value: T) -> &mut Self
     where
-        T: GetTypeRegistration + PreferencesType;
+        T: Reflectable + PreferencesType;
 }
 
 impl RegisterPreferencesExt for App {
     #[track_caller]
     fn register_preferences<T>(&mut self) -> &mut Self
     where
-        T: GetTypeRegistration + PreferencesType + Default,
+        T: Reflectable + PreferencesType + Default,
     {
         self.register_type::<T>()
             .register_type_data::<T, ReflectPreferences>()
@@ -133,7 +140,7 @@ impl RegisterPreferencesExt for App {
     #[track_caller]
     fn register_preferences_with_default_value<T>(&mut self, default_value: T) -> &mut Self
     where
-        T: GetTypeRegistration + PreferencesType,
+        T: Reflectable + PreferencesType,
     {
         self.register_type::<T>()
             .register_type_data::<T, ReflectPreferences>()
@@ -160,7 +167,7 @@ impl<T> RegisteredPreferencesPlugin<T> {
 
 impl<T> Plugin for RegisteredPreferencesPlugin<T>
 where
-    T: PreferencesType + GetTypeRegistration,
+    T: PreferencesType + Reflectable,
 {
     fn build(&self, app: &mut App) {
         let initial_value = {
@@ -177,8 +184,7 @@ where
                 Self::set_reflect_map_value
                     .in_set(PreferencesSet::SetReflectMapValues)
                     .run_if(
-                        preferences_changed::<T>
-                            .and_then(resource_exists::<PreferencesSerializableMap>),
+                        preferences_changed::<T>.and(resource_exists::<PreferencesSerializableMap>),
                     ),
             );
     }
