@@ -4,7 +4,7 @@
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy_inspector_egui::bevy_egui::{EguiContexts, EguiPlugin};
-use bevy_inspector_egui::{egui, reflect_inspector, DefaultInspectorConfigPlugin};
+use bevy_inspector_egui::{DefaultInspectorConfigPlugin, egui, reflect_inspector};
 use bevy_simple_preferences::PreferencesResource;
 use bevy_simple_preferences::*;
 use std::marker::PhantomData;

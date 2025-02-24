@@ -15,7 +15,9 @@ pub(crate) struct PreferencesRegistryData<'a> {
 
 #[cold]
 fn preferences_registry_fail(full_path: &str, short_path: &str, msg: &str) -> ! {
-    panic!("Type {full_path} {msg}.\nYou can try to call `.register_preferences::<{short_path}>()`\n or `.register_type::<{short_path}>()` with the type annotated `#[reflect(Preferences)]`")
+    panic!(
+        "Type {full_path} {msg}.\nYou can try to call `.register_preferences::<{short_path}>()`\n or `.register_type::<{short_path}>()` with the type annotated `#[reflect(Preferences)]`"
+    )
 }
 
 impl<'a> PreferencesRegistryData<'a> {

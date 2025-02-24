@@ -171,8 +171,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileStorage, PreferencesStorage};
-    use crate::serializable_map::PreferencesSerializableMap;
     use crate::ReflectPreferences;
+    use crate::serializable_map::PreferencesSerializableMap;
 
     #[derive(Reflect, PartialEq, Debug, Default)]
     #[reflect(Preferences)]

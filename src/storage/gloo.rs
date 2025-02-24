@@ -2,8 +2,8 @@ use crate::serializable_map::{PreferencesSerializableMap, PreferencesSerializabl
 use bevy::log::*;
 use serde::de::DeserializeSeed;
 
-use crate::storage::PreferencesStorage;
 use crate::Result;
+use crate::storage::PreferencesStorage;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 enum GlooStorageType {

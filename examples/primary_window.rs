@@ -1,11 +1,11 @@
 //! Shows how to store the primary window position in preferences.
 
+use bevy::DefaultPlugins;
 use bevy::a11y::Focus;
 use bevy::app::App;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::window::*;
-use bevy::DefaultPlugins;
 use bevy_simple_preferences::*;
 
 // This struct has the same fields as Window, but only the ones we want to store in the preferences.

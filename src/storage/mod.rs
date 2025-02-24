@@ -9,8 +9,8 @@ pub mod fs;
 #[cfg(target_family = "wasm")]
 pub(crate) mod gloo;
 
-use crate::serializable_map::{PreferencesSerializableMap, PreferencesSerializableMapSeed};
 use crate::Result;
+use crate::serializable_map::{PreferencesSerializableMap, PreferencesSerializableMapSeed};
 use bevy::prelude::*;
 use std::ops::Deref;
 use std::sync::Arc;

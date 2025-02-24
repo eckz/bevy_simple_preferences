@@ -143,12 +143,17 @@ fn effective_type_path<'a>(
 ) -> &'a str {
     if let Some(type_registration) = type_registry.get_with_short_type_path(short_type_path) {
         let registered_type_path = type_registration.type_info().type_path();
-        assert_eq!(registered_type_path, type_path, "Short type path {short_type_path} corresponds to {registered_type_path}, not to {type_path}. Perhaps you missed to call register_preferences in a type");
+        assert_eq!(
+            registered_type_path, type_path,
+            "Short type path {short_type_path} corresponds to {registered_type_path}, not to {type_path}. Perhaps you missed to call register_preferences in a type"
+        );
         short_type_path
     } else if type_registry.get_with_type_path(type_path).is_some() {
         type_path
     } else {
-        panic!("Type {type_path} ({short_type_path}) not registered in type_registry. Use register_preferences to register it")
+        panic!(
+            "Type {type_path} ({short_type_path}) not registered in type_registry. Use register_preferences to register it"
+        )
     }
 }
 
@@ -418,7 +423,7 @@ mod tests {
 
     use super::{PreferencesSerializableMap, PreferencesSerializableMapSeed};
     use crate::ReflectPreferences;
-    use serde_test::{assert_ser_tokens, Token};
+    use serde_test::{Token, assert_ser_tokens};
 
     #[derive(Reflect, Clone, PartialEq, Debug, Default)]
     #[reflect(Preferences)]
